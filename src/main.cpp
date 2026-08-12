@@ -232,10 +232,11 @@ int runRecordMp3Mode(audio::INMP441& mic, const Config& config) {
         return 1;
     }
 
-    const std::string bitrate = "192";
-    const std::string cmd = "lame --silent -b " + bitrate + " " + tmpWav + " " +
+    // Encode a maximally-compatible MP3: CBR 128 kbps mono @ 44.1 kHz
+    // (WhatsApp and most instant messengers reject 48 kHz MP3s).
+    const std::string cmd = "lame --silent --resample 44100 -b 128 " + tmpWav + " " +
                             config.outputFile;
-    log.info("encoding MP3 (%s kbps) with lame...", bitrate.c_str());
+    log.info("encoding MP3 (128 kbps CBR @ 44.1 kHz) with lame...");
     const int rc = std::system(cmd.c_str());
     std::remove(tmpWav.c_str());
 
