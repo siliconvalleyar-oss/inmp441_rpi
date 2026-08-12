@@ -27,7 +27,7 @@ using core::RunMode;
 constexpr size_t kChunkFrames = 240;
 
 // Application version reported by --version and the menu banner.
-constexpr const char* kAppVersion = "1.6.0";
+constexpr const char* kAppVersion = "1.7.0";
 
 // Level test duration used by the interactive menu.
 constexpr double kMenuMeterSeconds = 5.0;
@@ -185,6 +185,12 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
     size_t dropoutFrames = 0;
     bool inDropout = false;
 
+    // Optional live VU meter drawn to stderr during the recording.
+    audio::RmsAnalyzer recordMeter;
+    const auto meterInterval =
+        std::chrono::duration<double, std::milli>(config.meterIntervalMs);
+    auto nextMeter = std::chrono::steady_clock::now() + meterInterval;
+
     while (!core::SignalHandler::shouldStop()) {
         const auto elapsed = std::chrono::steady_clock::now() - start;
         if (elapsed >= duration) {
@@ -194,6 +200,19 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
         const size_t read = mic.readFrames(frames.data(), frames.size());
         if (read == 0) {
             continue;
+        }
+
+        if (config.showRecordMeter) {
+            recordMeter.addFrames(frames.data(), read, config.selectLeftChannel);
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= nextMeter) {
+                const std::string meter = audio::renderMeter(recordMeter.rmsDb(),
+                                                             recordMeter.peakDb(), 36);
+                std::fprintf(stderr, "\r%s  [%g s]", meter.c_str(), config.durationSeconds);
+                std::fflush(stderr);
+                recordMeter.reset();
+                nextMeter = now + meterInterval;
+            }
         }
 
         for (size_t i = 0; i < read; ++i) {
@@ -234,6 +253,10 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
             failed = true;
             break;
         }
+    }
+
+    if (config.showRecordMeter) {
+        std::fprintf(stderr, "\n");
     }
 
     if (!writer.close()) {
@@ -412,6 +435,8 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
                 break;
             }
             case '5': {
+                // Show the live VU meter while recording from the menu.
+                config.showRecordMeter = true;
                 const int rc = (config.mode == RunMode::kRecordMp3)
                                    ? runRecordMp3Mode(mic, config)
                                    : runRecordMode(mic, config);

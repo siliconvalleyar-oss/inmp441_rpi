@@ -23,6 +23,7 @@ struct Config {
     bool selectLeftChannel = true;   // L/R select: true = left, false = right
     bool driveLrSelectGpio = true;   // drive GPIO21 to control the L/R pin
     bool recordStereo = false;       // WAV: interleaved stereo instead of mono
+    bool showRecordMeter = false;    // live VU meter on stderr during recording
     double warmupSeconds = 4.0;      // discard startup transient before recording
     double gainDb = 0.0;             // digital gain applied on write (dB)
     double dropoutThresholdSeconds = 1.0;  // min digital-silence run to flag

@@ -152,6 +152,8 @@ Config parseArgs(int argc, char* argv[]) {
             }
         } else if (arg == "--stereo") {
             config.recordStereo = true;
+        } else if (arg == "--meter") {
+            config.showRecordMeter = true;
         } else if (arg == "--no-lr-gpio") {
             config.driveLrSelectGpio = false;
         } else if (arg == "--verbose" || arg == "-v") {
@@ -215,6 +217,7 @@ void printUsage() {
         "                          -> +3V3). Also drives GPIO21 to match.\n"
         "  --stereo                Record both I2S channels (the unused slot is\n"
         "                          silent with a single microphone)\n"
+        "  --meter                 Show a live VU meter on stderr while recording\n"
         "  --no-lr-gpio            Do not drive GPIO21; the mic L/R pin is wired\n"
         "                          to GND (left) or +3V3 (right) permanently\n"
         "  -v, --verbose           Verbose (debug) logging\n"
