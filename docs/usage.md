@@ -28,6 +28,9 @@ Options:
                              The INMP441 is very quiet for speech: try +20 to
                              +30 dB for close talk, +40 dB for room ambience.
                              Clips at full scale.
+      --dropout <SEC>        Flag runs of digital silence longer than this
+                             (default 1 s) as mic dropouts in the recording
+                             summary; use to diagnose flaky wiring/capsule.
   -c, --channel <left|right> I2S channel the mic is on (default: left).
       --no-lr-gpio           Do NOT drive GPIO 21 (L/R pin). Use this if
                              L/R is hard-wired to GND (left) or 3.3 V (right).

@@ -27,7 +27,7 @@ using core::RunMode;
 constexpr size_t kChunkFrames = 240;
 
 // Application version reported by --version and the menu banner.
-constexpr const char* kAppVersion = "1.5.0";
+constexpr const char* kAppVersion = "1.6.0";
 
 // Level test duration used by the interactive menu.
 constexpr double kMenuMeterSeconds = 5.0;
@@ -177,6 +177,14 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
         return static_cast<int16_t>(v);
     };
 
+    // Mic dropout detection: consecutive digital-silence (zero) samples.
+    const size_t dropoutThreshold =
+        static_cast<size_t>(config.sampleRate * config.dropoutThresholdSeconds);
+    size_t zeroRun = 0;
+    size_t dropoutEvents = 0;
+    size_t dropoutFrames = 0;
+    bool inDropout = false;
+
     while (!core::SignalHandler::shouldStop()) {
         const auto elapsed = std::chrono::steady_clock::now() - start;
         if (elapsed >= duration) {
@@ -189,12 +197,36 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
         }
 
         for (size_t i = 0; i < read; ++i) {
+            const int16_t sample =
+                config.recordStereo
+                    ? (static_cast<int16_t>(frames[i].left16() | frames[i].right16()))
+                    : (config.selectLeftChannel ? frames[i].left16() : frames[i].right16());
+
+            if (sample == 0) {
+                ++zeroRun;
+                if (zeroRun >= dropoutThreshold && !inDropout) {
+                    inDropout = true;
+                    ++dropoutEvents;
+                    log.warning("MIC DROPOUT: %g s of digital silence detected",
+                                config.dropoutThresholdSeconds);
+                }
+                if (inDropout) {
+                    ++dropoutFrames;
+                }
+            } else {
+                if (inDropout) {
+                    log.warning("mic recovered after %.2f s of silence",
+                                static_cast<double>(zeroRun) / config.sampleRate);
+                    inDropout = false;
+                }
+                zeroRun = 0;
+            }
+
             if (config.recordStereo) {
                 interleaved[i * 2] = toInt16(frames[i].left16());
                 interleaved[i * 2 + 1] = toInt16(frames[i].right16());
             } else {
-                interleaved[i] = toInt16(config.selectLeftChannel ? frames[i].left16()
-                                                                  : frames[i].right16());
+                interleaved[i] = toInt16(sample);
             }
         }
 
@@ -206,6 +238,15 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
 
     if (!writer.close()) {
         failed = true;
+    }
+
+    if (dropoutEvents > 0) {
+        log.warning("AUDIO DROPOUTS: %zu event(s), %.2f s total digital silence in the recording",
+                    dropoutEvents,
+                    static_cast<double>(dropoutFrames) / config.sampleRate);
+    } else {
+        log.info("no mic dropouts detected (digital-silence threshold %.1f s)",
+                 config.dropoutThresholdSeconds);
     }
 
     if (failed) {

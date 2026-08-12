@@ -112,6 +112,14 @@ Config parseArgs(int argc, char* argv[]) {
                 return config;
             }
             ++i;
+        } else if (arg == "--dropout") {
+            if (i + 1 >= args.size() ||
+                !parseDouble(args[i + 1].c_str(), &config.dropoutThresholdSeconds)) {
+                config.valid = false;
+                config.error = "--dropout requires a numeric value (seconds)";
+                return config;
+            }
+            ++i;
         } else if (arg == "--gain") {
             if (i + 1 >= args.size() || !parseDouble(args[i + 1].c_str(), &config.gainDb)) {
                 config.valid = false;
@@ -199,6 +207,9 @@ void printUsage() {
         "                          The INMP441 is very quiet for speech: try +20\n"
         "                          to +30 dB for close talk, +40 dB for room\n"
         "                          ambience. Clips at full scale.\n"
+        "      --dropout <sec>      Flag runs of digital silence longer than this\n"
+        "                          (default 1 s) as mic dropouts in the recording\n"
+        "                          summary (diagnosis of flaky wiring/capsule)\n"
         "  -c, --channel <lr>      Mic channel and I2S slot to read:\n"
         "                          'left' (L/R pin -> GND) or 'right' (L/R pin\n"
         "                          -> +3V3). Also drives GPIO21 to match.\n"
