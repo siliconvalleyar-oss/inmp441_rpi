@@ -13,9 +13,10 @@ class RmsAnalyzer {
 public:
     void reset();
 
-    // Adds `frameCount` frames. When `useLeftOnly` is true only the left
-    // channel is accumulated (single-microphone setups).
-    void addFrames(const AudioFrame* frames, size_t frameCount, bool useLeftOnly);
+    // Adds `frameCount` frames. When `useLeft` is true only the left channel
+    // is accumulated, otherwise only the right channel (single-microphone
+    // setups where the mic transmits on the channel chosen by its L/R pin).
+    void addFrames(const AudioFrame* frames, size_t frameCount, bool useLeft);
 
     // RMS level in dBFS (silence => -inf, full scale => 0 dB).
     double rmsDb() const;

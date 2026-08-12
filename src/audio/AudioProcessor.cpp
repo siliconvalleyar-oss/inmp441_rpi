@@ -19,23 +19,12 @@ void RmsAnalyzer::reset() {
     sampleCount_ = 0;
 }
 
-void RmsAnalyzer::addFrames(const AudioFrame* frames, size_t frameCount, bool useLeftOnly) {
+void RmsAnalyzer::addFrames(const AudioFrame* frames, size_t frameCount, bool useLeft) {
     for (size_t i = 0; i < frameCount; ++i) {
-        const float left = frames[i].leftFloat();
-        const float right = frames[i].rightFloat();
-
-        if (useLeftOnly) {
-            const double sample = left;
-            sumSquares_ += sample * sample;
-            peakAbs_ = std::max(peakAbs_, std::fabs(sample));
-            ++sampleCount_;
-        } else {
-            const double l = left;
-            const double r = right;
-            sumSquares_ += l * l + r * r;
-            peakAbs_ = std::max(peakAbs_, std::max(std::fabs(l), std::fabs(r)));
-            sampleCount_ += 2;
-        }
+        const float sample = useLeft ? frames[i].leftFloat() : frames[i].rightFloat();
+        sumSquares_ += static_cast<double>(sample) * sample;
+        peakAbs_ = std::max(peakAbs_, std::fabs(static_cast<double>(sample)));
+        ++sampleCount_;
     }
 }
 

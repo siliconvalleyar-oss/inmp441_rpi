@@ -37,13 +37,16 @@ bool ensureParentDirectory(const std::string& outputPath) {
         if (slash == std::string::npos) {
             break;
         }
-        current = dir.substr(0, slash);
-        if (::mkdir(current.c_str(), 0777) != 0 && errno != EEXIST) {
-            return false;
+        if (slash > start) {
+            current = dir.substr(0, slash);
+            if (::mkdir(current.c_str(), 0777) != 0 && errno != EEXIST) {
+                return false;
+            }
         }
         start = slash + 1;
     }
-    if (::mkdir(dir.c_str(), 0777) != 0 && errno != EEXIST) {
+    if (dir.size() > 1 &&
+        ::mkdir(dir.c_str(), 0777) != 0 && errno != EEXIST) {
         return false;
     }
     return true;
@@ -56,9 +59,16 @@ void runInfoMode(const Config& config) {
     std::printf("  BCLK           : %.3f MHz\n",
                 static_cast<double>(config.sampleRate) * 64.0 / 1000000.0);
     std::printf("  I2S pins (GPIO): SCK=%d (18), WS=%d (19), SD=%d (20)\n", 18, 19, 20);
-    std::printf("  L/R select     : GPIO 21 -> %s (physical pin 40)\n",
-                config.driveLrSelectGpio ? (config.selectLeftChannel ? "LOW (left)" : "HIGH (right)")
-                                          : "left as wired (--no-lr-gpio)");
+    std::printf("  mic channel     : %s (records the %s I2S slot)\n",
+                config.selectLeftChannel ? "left" : "right",
+                config.selectLeftChannel ? "left" : "right");
+    if (config.driveLrSelectGpio) {
+        std::printf("  L/R select     : GPIO 21 driven %s (physical pin 40)\n",
+                    config.selectLeftChannel ? "LOW (left)" : "HIGH (right)");
+    } else {
+        std::printf("  L/R select     : not driven; wire the mic L/R pin to GND "
+                    "(left) or +3V3 (right) yourself\n");
+    }
     std::printf("  run as root     : yes (required by bcm2835)\n");
 }
 
@@ -76,7 +86,7 @@ int runLevelMeter(audio::INMP441& mic, const Config& config) {    Logger& log = 
         if (read == 0) {
             continue;
         }
-        analyzer.addFrames(frames.data(), read, true);
+        analyzer.addFrames(frames.data(), read, config.selectLeftChannel);
 
         const auto now = std::chrono::steady_clock::now();
         if (now >= nextRefresh) {
@@ -109,7 +119,9 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
     log.info("recording %u frames (%u Hz, %s) to '%s'",
              static_cast<uint32_t>(config.sampleRate * config.durationSeconds),
              config.sampleRate,
-             config.recordStereo ? "stereo 16-bit" : "mono 16-bit (left)",
+             config.recordStereo
+                 ? "stereo 16-bit"
+                 : (config.selectLeftChannel ? "mono 16-bit (left)" : "mono 16-bit (right)"),
              path.c_str());
 
     bool failed = false;
@@ -129,7 +141,8 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
                 interleaved[i * 2] = frames[i].left16();
                 interleaved[i * 2 + 1] = frames[i].right16();
             } else {
-                interleaved[i] = frames[i].left16();
+                interleaved[i] = config.selectLeftChannel ? frames[i].left16()
+                                                          : frames[i].right16();
             }
         }
 
@@ -237,7 +250,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (config.showVersion) {
-        std::printf("inmp441_rpi 1.2.0\n");
+        std::printf("inmp441_rpi 1.3.0\n");
         return 0;
     }
 
