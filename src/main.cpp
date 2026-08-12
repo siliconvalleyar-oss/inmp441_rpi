@@ -611,36 +611,31 @@ int runPlayerMode(const Config& config) {
         return 1;
     }
 
+    // Política estricta de un solo dispositivo: el altavoz debe estar
+    // configurado con --bt-mac (o bt_mac en el config) y conectado. No hay
+    // auto-detección ni caída al altavoz local: el audio solo sale por él.
     BluetoothTool bt;
-    std::string mac = config.btMac;
+    const std::string mac = config.btMac;
     if (mac.empty()) {
-        mac = bt.discoverPairedDevice();
-        if (!mac.empty()) {
-            log.info("no --bt-mac given; using paired device %s", mac.c_str());
-        }
+        log.error("no Bluetooth speaker configured: set --bt-mac or bt_mac "
+                  "in the config file (required for --player)");
+        return 1;
     }
-
-    bool btReady = false;
-    if (!mac.empty()) {
-        btReady = bt.connect(mac);
-        if (!btReady) {
-            log.warning("Bluetooth connect failed; audio will go to the "
-                        "default (local) sink instead");
-        }
-    } else {
-        log.warning("no Bluetooth device configured (use --bt-mac or the "
-                    "config file); audio will go to the default sink");
+    if (!bt.connect(mac)) {
+        log.error("Bluetooth speaker %s is not available; playback aborted "
+                  "(audio only plays through that device)", mac.c_str());
+        return 1;
     }
 
     Player player;
     OledDisplay oled;
     if (oled.init()) {
-        oled.showMessage("inmp441 player", btReady ? mac : "no BT / local sink");
+        oled.showMessage("inmp441 player", mac);
     }
 
     // The OledDisplay destructor powers the screen down; the microphone
     // owns the bcm2835 mapping, so nothing is closed here.
-    return runPlayerScreen(tracks, player, oled, btReady ? mac : std::string());
+    return runPlayerScreen(tracks, player, oled, mac);
 }
 
 // Interactive menu shown after a console presentation. Lets the operator

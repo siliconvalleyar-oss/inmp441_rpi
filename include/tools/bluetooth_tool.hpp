@@ -46,10 +46,6 @@ public:
     BluetoothTool(const BluetoothTool&) = delete;
     BluetoothTool& operator=(const BluetoothTool&) = delete;
 
-    // Devuelve la MAC del primer dispositivo emparejado, o "" si no
-    // hay ninguno. Útil cuando el usuario no ha configurado --bt-mac.
-    std::string discoverPairedDevice() const;
-
     // Encender BT, emparejar/conectar y dejar el dispositivo como
     // salida por defecto. Devuelve true si quedó conectado.
     bool connect(const std::string& mac);

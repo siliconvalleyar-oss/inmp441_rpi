@@ -44,23 +44,6 @@ std::string BluetoothTool::capture(const std::string& cmd) {
     return out;
 }
 
-std::string BluetoothTool::discoverPairedDevice() const {
-    const std::string out = capture(
-        "timeout 5 bluetoothctl paired-devices 2>/dev/null | head -1 | awk '{print $2}'");
-    std::string mac = out;
-    // Recorta espacios / salto de línea.
-    const size_t first = mac.find_first_not_of(" \t\r\n");
-    const size_t last = mac.find_last_not_of(" \t\r\n");
-    if (first == std::string::npos) return std::string();
-    mac = mac.substr(first, last - first + 1);
-
-    // La MAC debe tener el formato xx:xx:xx:xx:xx:xx para ser útil.
-    if (mac.size() == 17 && mac.find(':') != std::string::npos) {
-        return mac;
-    }
-    return std::string();
-}
-
 void BluetoothTool::pair(const std::string& mac, const std::string& pin) {
     // Sin TTY, bluetoothctl puede bloquearse esperando entrada: cada
     // llamada va envuelta en timeout para que nunca cuelgue la app.
@@ -115,19 +98,38 @@ bool BluetoothTool::connect(const BluetoothConfig& config) {
 
     setDefaultSink(config.mac);
 
-    if (isConnected(config.mac)) {
-        lastMac_ = config.mac;
-        log().info("Bluetooth: connected to %s (A2DP).", config.mac.c_str());
-        return true;
+    if (!isConnected(config.mac)) {
+        log().warning("Bluetooth: could not connect to %s. Make sure the "
+                      "speaker is powered on and in pairing mode.", config.mac.c_str());
+        log().warning("Bluetooth device state:\n%s",
+                      capture("timeout 5 bluetoothctl info " + config.mac + " 2>&1 | head -8").c_str());
+        log().warning("PulseAudio sinks:\n%s",
+                      capture("timeout 5 pactl list short sinks 2>&1 | head -10").c_str());
+        return false;
     }
 
-    log().warning("Bluetooth: could not connect to %s. Make sure the "
-                  "speaker is powered on and in pairing mode.", config.mac.c_str());
-    log().warning("Bluetooth device state:\n%s",
-                  capture("timeout 5 bluetoothctl info " + config.mac + " 2>&1 | head -8").c_str());
-    log().warning("PulseAudio sinks:\n%s",
-                  capture("timeout 5 pactl list short sinks 2>&1 | head -10").c_str());
-    return false;
+    // Política estricta: el audio solo sale por este dispositivo. Verifica
+    // que PulseAudio tenga el sink de ESTA MAC como por defecto; si no lo
+    // tiene, se aborta en vez de caer al altavoz local.
+    std::string macUnderscored = config.mac;
+    for (char& c : macUnderscored) {
+        if (c == ':') c = '_';
+    }
+    const std::string sinkOk = capture(
+        "pactl get-default-sink 2>/dev/null | grep -qi '" + macUnderscored + "' && echo yes");
+    if (sinkOk.find("yes") == std::string::npos) {
+        log().warning("Bluetooth: PulseAudio has no default sink for %s; "
+                      "audio will NOT be routed. Reconnect the speaker and "
+                      "retry.", config.mac.c_str());
+        log().warning("PulseAudio sinks:\n%s",
+                      capture("timeout 5 pactl list short sinks 2>&1 | head -10").c_str());
+        return false;
+    }
+
+    lastMac_ = config.mac;
+    log().info("Bluetooth: connected to %s (A2DP) - audio via its sink.",
+               config.mac.c_str());
+    return true;
 }
 
 bool BluetoothTool::disconnect(const std::string& mac) {
@@ -149,16 +151,12 @@ void BluetoothTool::setDefaultSink(const std::string& mac) {
         if (c == ':') c = '_';
     }
 
-    // 1) Buscar un sink que contenga la MAC del dispositivo.
+    // Política estricta: solo se selecciona el sink de ESTA MAC (nunca un
+    // sink bluez genérico ni el altavoz local).
     std::string cmd =
         "SINK=$(pactl list short sinks 2>/dev/null | grep -i '" + macUnderscored +
         "' | head -1 | awk '{print $2}'); "
         "[ -n \"$SINK\" ] && pactl set-default-sink \"$SINK\" >/dev/null 2>&1";
-
-    // 2) Si no se encontró, usar cualquier sink bluez existente.
-    cmd += " || { "
-           "SINK=$(pactl list short sinks 2>/dev/null | grep -i bluez | head -1 | awk '{print $2}'); "
-           "[ -n \"$SINK\" ] && pactl set-default-sink \"$SINK\" >/dev/null 2>&1; }";
 
     // pactl es rápido y seguro (a diferencia de bluetoothctl, no se cuelga
     // sin TTY), así que no hace falta timeout aquí.
