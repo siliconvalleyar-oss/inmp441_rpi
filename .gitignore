@@ -1,0 +1,25 @@
+# Build artifacts
+bin/
+obj/
+*.o
+*.d
+*.gcno
+*.gcda
+
+# Audio captures
+*.wav
+*.raw
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
