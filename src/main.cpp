@@ -1,7 +1,10 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 #include "audio/AudioProcessor.hpp"
@@ -59,8 +62,7 @@ void runInfoMode(const Config& config) {
     std::printf("  run as root     : yes (required by bcm2835)\n");
 }
 
-int runLevelMeter(audio::INMP441& mic, const Config& config) {
-    Logger& log = Logger::instance();
+int runLevelMeter(audio::INMP441& mic, const Config& config) {    Logger& log = Logger::instance();
     audio::RmsAnalyzer analyzer;
     std::vector<audio::AudioFrame> frames(kChunkFrames);
 
@@ -89,18 +91,13 @@ int runLevelMeter(audio::INMP441& mic, const Config& config) {
     return 0;
 }
 
-int runRecordMode(audio::INMP441& mic, const Config& config) {
+// Records `durationSeconds` of audio to a 16-bit WAV file at `path`.
+bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::string& path) {
     Logger& log = Logger::instance();
 
-    if (!ensureParentDirectory(config.outputFile)) {
-        log.error("cannot create output directory for '%s'", config.outputFile.c_str());
-        return 1;
-    }
-
-    audio::WaveWriter writer(config.outputFile, config.sampleRate,
-                             config.recordStereo);
+    audio::WaveWriter writer(path, config.sampleRate, config.recordStereo);
     if (!writer.open()) {
-        return 1;
+        return false;
     }
 
     std::vector<audio::AudioFrame> frames(kChunkFrames);
@@ -113,7 +110,7 @@ int runRecordMode(audio::INMP441& mic, const Config& config) {
              static_cast<uint32_t>(config.sampleRate * config.durationSeconds),
              config.sampleRate,
              config.recordStereo ? "stereo 16-bit" : "mono 16-bit (left)",
-             config.outputFile.c_str());
+             path.c_str());
 
     bool failed = false;
     while (!core::SignalHandler::shouldStop()) {
@@ -148,15 +145,60 @@ int runRecordMode(audio::INMP441& mic, const Config& config) {
 
     if (failed) {
         log.error("recording failed");
+        return false;
+    }
+
+    log.info("recorded %.1f s, %llu frames (%u bytes) -> %s",
+             config.durationSeconds,
+             static_cast<unsigned long long>(writer.framesWritten()),
+             static_cast<unsigned int>(writer.framesWritten() * (config.recordStereo ? 4U : 2U)),
+             path.c_str());
+    return true;
+}
+
+int runRecordMode(audio::INMP441& mic, const Config& config) {
+    Logger& log = Logger::instance();
+
+    if (!ensureParentDirectory(config.outputFile)) {
+        log.error("cannot create output directory for '%s'", config.outputFile.c_str());
         return 1;
     }
 
-    const double seconds = config.durationSeconds;
-    log.info("recorded %.1f s, %llu frames (%u bytes) -> %s",
-             seconds,
-             static_cast<unsigned long long>(writer.framesWritten()),
-             static_cast<unsigned int>(writer.framesWritten() * (config.recordStereo ? 4U : 2U)),
-             config.outputFile.c_str());
+    if (!recordWavToFile(mic, config, config.outputFile)) {
+        return 1;
+    }
+    return 0;
+}
+
+int runRecordMp3Mode(audio::INMP441& mic, const Config& config) {
+    Logger& log = Logger::instance();
+
+    if (!ensureParentDirectory(config.outputFile)) {
+        log.error("cannot create output directory for '%s'", config.outputFile.c_str());
+        return 1;
+    }
+
+    // Record to a temporary WAV, then transcode with lame.
+    const std::string tmpWav =
+        "/tmp/inmp441_record_" + std::to_string(static_cast<long>(::getpid())) + ".wav";
+    if (!recordWavToFile(mic, config, tmpWav)) {
+        std::remove(tmpWav.c_str());
+        return 1;
+    }
+
+    const std::string bitrate = "192";
+    const std::string cmd = "lame --silent -b " + bitrate + " " + tmpWav + " " +
+                            config.outputFile;
+    log.info("encoding MP3 (%s kbps) with lame...", bitrate.c_str());
+    const int rc = std::system(cmd.c_str());
+    std::remove(tmpWav.c_str());
+
+    if (rc != 0) {
+        log.error("lame failed (exit %d); is lame installed?", rc);
+        return 1;
+    }
+
+    log.info("saved MP3 -> %s", config.outputFile.c_str());
     return 0;
 }
 
@@ -195,7 +237,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (config.showVersion) {
-        std::printf("inmp441_rpi 1.1.0\n");
+        std::printf("inmp441_rpi 1.2.0\n");
         return 0;
     }
 
@@ -216,6 +258,9 @@ int main(int argc, char* argv[]) {
             break;
         case RunMode::kRecordWav:
             result = runRecordMode(mic, config);
+            break;
+        case RunMode::kRecordMp3:
+            result = runRecordMp3Mode(mic, config);
             break;
         case RunMode::kDumpRawWords:
             result = runDumpMode(mic, config);

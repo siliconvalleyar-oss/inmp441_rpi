@@ -9,6 +9,7 @@ namespace core {
 enum class RunMode {
     kLevelMeter,   // live RMS / peak meter (default)
     kRecordWav,    // record N seconds to a WAV file
+    kRecordMp3,    // record N seconds to a WAV then encode to MP3 (lame)
     kDumpRawWords, // print N raw 32-bit I2S words (debug / alignment check)
     kInfo,         // print hardware / configuration info and exit
 };

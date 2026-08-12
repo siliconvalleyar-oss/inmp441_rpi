@@ -81,6 +81,9 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     wget \
     curl
 
+log "Installing lame (MP3 encoder for --mp3 mode)..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y lame
+
 # ---------------------------------------------------------------------------
 # bcm2835 library
 # ---------------------------------------------------------------------------

@@ -78,6 +78,13 @@ Config parseArgs(int argc, char* argv[]) {
             if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-') {
                 config.outputFile = args[++i];
             }
+        } else if (arg == "--mp3") {
+            config.mode = RunMode::kRecordMp3;
+            if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-') {
+                config.outputFile = args[++i];
+            } else {
+                config.outputFile = "output/recording.mp3";
+            }
         } else if (arg == "--dump") {
             config.mode = RunMode::kDumpRawWords;
             if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-') {
@@ -159,6 +166,8 @@ void printUsage() {
         "  --level                 Live RMS/peak meter (default)\n"
         "  --wav [file.wav]        Record audio to a 16-bit PCM WAV file\n"
         "                          (default: output/recording.wav)\n"
+        "  --mp3 [file.mp3]        Record to a temp WAV then encode to MP3\n"
+        "                          with lame (default: output/recording.mp3)\n"
         "  --dump [count]          Dump N raw 32-bit I2S words and exit (debug)\n"
         "  --info                  Print hardware/configuration info and exit\n"
         "\n"
