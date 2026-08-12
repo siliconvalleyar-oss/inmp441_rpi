@@ -112,6 +112,13 @@ Config parseArgs(int argc, char* argv[]) {
                 return config;
             }
             ++i;
+        } else if (arg == "--gain") {
+            if (i + 1 >= args.size() || !parseDouble(args[i + 1].c_str(), &config.gainDb)) {
+                config.valid = false;
+                config.error = "--gain requires a numeric value (dB)";
+                return config;
+            }
+            ++i;
         } else if (arg == "--warmup") {
             if (i + 1 >= args.size() || !parseDouble(args[i + 1].c_str(), &config.warmupSeconds)) {
                 config.valid = false;
@@ -188,6 +195,10 @@ void printUsage() {
         "      --warmup <sec>       Seconds of audio discarded before recording\n"
         "                          (default 4; removes the I2S startup transient;\n"
         "                           set 0 to disable)\n"
+        "      --gain <db>          Digital gain applied to recordings (default 0).\n"
+        "                          The INMP441 is very quiet for speech: try +20\n"
+        "                          to +30 dB for close talk, +40 dB for room\n"
+        "                          ambience. Clips at full scale.\n"
         "  -c, --channel <lr>      Mic channel and I2S slot to read:\n"
         "                          'left' (L/R pin -> GND) or 'right' (L/R pin\n"
         "                          -> +3V3). Also drives GPIO21 to match.\n"

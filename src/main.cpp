@@ -1,6 +1,7 @@
 #include <cerrno>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -158,6 +159,24 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
              path.c_str());
 
     bool failed = false;
+
+    // Digital gain (dB -> linear), applied when converting to 16-bit.
+    const float gain =
+        (config.gainDb == 0.0f) ? 1.0f : std::pow(10.0f, static_cast<float>(config.gainDb) / 20.0f);
+
+    auto toInt16 = [gain](int16_t sample) -> int16_t {
+        if (gain == 1.0f) {
+            return sample;
+        }
+        long v = static_cast<long>(sample * gain);
+        if (v > 32767L) {
+            v = 32767L;
+        } else if (v < -32768L) {
+            v = -32768L;
+        }
+        return static_cast<int16_t>(v);
+    };
+
     while (!core::SignalHandler::shouldStop()) {
         const auto elapsed = std::chrono::steady_clock::now() - start;
         if (elapsed >= duration) {
@@ -171,11 +190,11 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
 
         for (size_t i = 0; i < read; ++i) {
             if (config.recordStereo) {
-                interleaved[i * 2] = frames[i].left16();
-                interleaved[i * 2 + 1] = frames[i].right16();
+                interleaved[i * 2] = toInt16(frames[i].left16());
+                interleaved[i * 2 + 1] = toInt16(frames[i].right16());
             } else {
-                interleaved[i] = config.selectLeftChannel ? frames[i].left16()
-                                                          : frames[i].right16();
+                interleaved[i] = toInt16(config.selectLeftChannel ? frames[i].left16()
+                                                                  : frames[i].right16());
             }
         }
 

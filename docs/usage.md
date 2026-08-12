@@ -24,6 +24,10 @@ Options:
       --warmup <SEC>         Seconds of audio discarded before recording
                              (default: 4; removes the I2S startup transient,
                              set 0 to disable).
+      --gain <DB>            Digital gain applied to recordings (default 0).
+                             The INMP441 is very quiet for speech: try +20 to
+                             +30 dB for close talk, +40 dB for room ambience.
+                             Clips at full scale.
   -c, --channel <left|right> I2S channel the mic is on (default: left).
       --no-lr-gpio           Do NOT drive GPIO 21 (L/R pin). Use this if
                              L/R is hard-wired to GND (left) or 3.3 V (right).

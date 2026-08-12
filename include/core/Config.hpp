@@ -24,6 +24,7 @@ struct Config {
     bool driveLrSelectGpio = true;   // drive GPIO21 to control the L/R pin
     bool recordStereo = false;       // WAV: interleaved stereo instead of mono
     double warmupSeconds = 4.0;      // discard startup transient before recording
+    double gainDb = 0.0;             // digital gain applied on write (dB)
     bool verbose = false;
     uint32_t dumpWordCount = 16;     // words printed by --dump
     double meterIntervalMs = 120.0;  // refresh period of the level meter
