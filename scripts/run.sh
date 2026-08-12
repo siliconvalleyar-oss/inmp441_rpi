@@ -3,8 +3,8 @@
 # run.sh - runs the binary with sudo (bcm2835 needs /dev/mem access).
 #
 # Usage:
-#   bash scripts/run.sh --info
-#   bash scripts/run.sh --wav capture.wav -d 10
+#   bash scripts/run.sh                # interactive menu (default)
+#   bash scripts/run.sh --wav cap.wav -d 10
 #   bash scripts/run.sh --level
 
 set -euo pipefail

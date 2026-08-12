@@ -279,6 +279,23 @@ bool I2SController::init(uint32_t sampleRateHz, bool selectLeftChannel,
     return true;
 }
 
+void I2SController::setLrSelect(bool selectLeftChannel, bool driveLrSelectGpio) {
+    if (!initialized_) {
+        return;
+    }
+    if (driveLrSelectGpio) {
+        bcm2835_gpio_fsel(kGpioLrSel, BCM2835_GPIO_FSEL_OUTP);
+        bcm2835_gpio_write(kGpioLrSel, selectLeftChannel ? LOW : HIGH);
+        core::Logger::instance().info("L/R select: GPIO%d driven %s (mic channel %s)",
+                                      kGpioLrSel,
+                                      selectLeftChannel ? "LOW" : "HIGH",
+                                      selectLeftChannel ? "left" : "right");
+    } else {
+        core::Logger::instance().info("L/R select: GPIO%d left untouched (wire it to GND/3V3 yourself)",
+                                      kGpioLrSel);
+    }
+}
+
 void I2SController::shutdown() {
     if (!initialized_) {
         return;

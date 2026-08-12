@@ -26,6 +26,10 @@ public:
     // Stops the peripheral, disables the clock and releases /dev/mem.
     void shutdown();
 
+    // Re-applies the L/R select drive level (mic channel). Only touches the
+    // GPIO; does NOT re-initialise the peripheral or clock.
+    void setLrSelect(bool selectLeftChannel, bool driveLrSelectGpio);
+
     // Reads up to `maxWords` raw 32-bit words from the RX FIFO. Returns the
     // number of words actually read (0 on timeout or error).
     size_t readRaw(uint32_t* buffer, size_t maxWords);

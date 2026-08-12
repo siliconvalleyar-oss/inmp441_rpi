@@ -1,7 +1,9 @@
 #include <cerrno>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <iostream>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -22,6 +24,12 @@ using core::RunMode;
 
 // Frames fetched per I2S read burst (~5 ms at 48 kHz).
 constexpr size_t kChunkFrames = 240;
+
+// Application version reported by --version and the menu banner.
+constexpr const char* kAppVersion = "1.4.0";
+
+// Level test duration used by the interactive menu.
+constexpr double kMenuMeterSeconds = 5.0;
 
 // Creates the parent directory (or directories) of an output path.
 bool ensureParentDirectory(const std::string& outputPath) {
@@ -79,7 +87,11 @@ int runLevelMeter(audio::INMP441& mic, const Config& config) {    Logger& log = 
     const auto interval = std::chrono::duration<double, std::milli>(config.meterIntervalMs);
     auto nextRefresh = std::chrono::steady_clock::now() + interval;
 
-    log.info("level meter started (Ctrl+C to stop)");
+    const auto meterStart = std::chrono::steady_clock::now();
+    const auto meterLimit = std::chrono::duration<double>(config.meterSeconds);
+
+    log.info("level meter started%s",
+             config.meterSeconds > 0.0 ? " (bounded)" : " (Ctrl+C to stop)");
 
     while (!core::SignalHandler::shouldStop()) {
         const size_t read = mic.readFrames(frames.data(), frames.size());
@@ -87,6 +99,11 @@ int runLevelMeter(audio::INMP441& mic, const Config& config) {    Logger& log = 
             continue;
         }
         analyzer.addFrames(frames.data(), read, config.selectLeftChannel);
+
+        if (config.meterSeconds > 0.0 &&
+            std::chrono::steady_clock::now() - meterStart >= meterLimit) {
+            break;
+        }
 
         const auto now = std::chrono::steady_clock::now();
         if (now >= nextRefresh) {
@@ -113,8 +130,24 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
     std::vector<audio::AudioFrame> frames(kChunkFrames);
     std::vector<int16_t> interleaved(kChunkFrames * (config.recordStereo ? 2 : 1));
 
-    const auto start = std::chrono::steady_clock::now();
+    auto start = std::chrono::steady_clock::now();
     const auto duration = std::chrono::duration<double>(config.durationSeconds);
+
+    // Discard the I2S startup transient (the mic's internal HPF settles over
+    // a few seconds) so recordings start clean.
+    if (config.warmupSeconds > 0.0) {
+        const auto warmupLimit = std::chrono::duration<double>(config.warmupSeconds);
+        log.info("warming up %.1f s (discarding startup transient)...",
+                 config.warmupSeconds);
+        while (std::chrono::steady_clock::now() - start < warmupLimit &&
+               !core::SignalHandler::shouldStop()) {
+            if (mic.readFrames(frames.data(), frames.size()) == 0) {
+                continue;
+            }
+        }
+        log.info("warm-up done");
+        start = std::chrono::steady_clock::now();
+    }
 
     log.info("recording %u frames (%u Hz, %s) to '%s'",
              static_cast<uint32_t>(config.sampleRate * config.durationSeconds),
@@ -231,6 +264,116 @@ int runDumpMode(audio::INMP441& mic, const Config& config) {
     return 0;
 }
 
+// Interactive menu shown after a console presentation. Lets the operator
+// configure the recording duration (min 5 s by default), channel, output
+// format and file, then record or run a bounded level test.
+int runMenuMode(audio::INMP441& mic, const Config& initial) {
+    Logger& log = Logger::instance();
+    Config config = initial;
+    config.mode = RunMode::kRecordWav;
+
+    while (true) {
+        std::printf("\n");
+        std::printf("============================================================\n");
+        std::printf("  inmp441_rpi %s - INMP441 I2S microphone recorder\n", kAppVersion);
+        std::printf("============================================================\n");
+        std::printf("  Board   : %s\n", audio::I2SController::boardInfo());
+        std::printf("  Pins    : SCK=GPIO18  WS=GPIO19  SD=GPIO20\n");
+        std::printf("  Rate    : %u Hz\n", config.sampleRate);
+        std::printf("  Channel : %s (L/R pin -> %s)\n",
+                    config.selectLeftChannel ? "left" : "right",
+                    config.selectLeftChannel ? "GND" : "+3V3");
+        std::printf("  Format  : %s\n",
+                    config.mode == RunMode::kRecordMp3 ? "MP3 (lame)" : "WAV");
+        std::printf("  File    : %s\n", config.outputFile.c_str());
+        std::printf("------------------------------------------------------------\n");
+        std::printf("  1) Duration ....... %g s (min 5 s for test recordings)\n",
+                    config.durationSeconds);
+        std::printf("  2) Channel ........ %s\n",
+                    config.selectLeftChannel ? "left" : "right");
+        std::printf("  3) Format ......... %s\n",
+                    config.mode == RunMode::kRecordMp3 ? "MP3" : "WAV");
+        std::printf("  4) Level test ..... live meter for %g s\n", kMenuMeterSeconds);
+        std::printf("  5) RECORD\n");
+        std::printf("  0/Q) Quit\n");
+        std::printf("------------------------------------------------------------\n");
+        std::printf("Choice> ");
+        std::fflush(stdout);
+
+        std::string line;
+        if (!std::getline(std::cin, line)) {
+            std::printf("\nBye.\n");
+            break;
+        }
+        if (line.empty()) {
+            continue;
+        }
+        const char choice =
+            static_cast<char>(std::tolower(static_cast<unsigned char>(line[0])));
+
+        switch (choice) {
+            case '1': {
+                std::printf("Duration in seconds (min 1) [%g]> ", config.durationSeconds);
+                std::fflush(stdout);
+                std::string value;
+                std::getline(std::cin, value);
+                if (!value.empty()) {
+                    char* end = nullptr;
+                    const double d = std::strtod(value.c_str(), &end);
+                    if (end != value.c_str() && *end == '\0' && d >= 1.0) {
+                        config.durationSeconds = d;
+                    } else {
+                        std::printf("  (ignored: must be a number >= 1)\n");
+                    }
+                }
+                break;
+            }
+            case '2':
+                config.selectLeftChannel = !config.selectLeftChannel;
+                mic.setChannel(config.selectLeftChannel, config.driveLrSelectGpio);
+                log.info("channel set to %s (L/R pin -> %s)",
+                         config.selectLeftChannel ? "left" : "right",
+                         config.selectLeftChannel ? "GND" : "+3V3");
+                break;
+            case '3':
+                if (config.mode == RunMode::kRecordMp3) {
+                    config.mode = RunMode::kRecordWav;
+                    config.outputFile = "output/recording.wav";
+                } else {
+                    config.mode = RunMode::kRecordMp3;
+                    config.outputFile = "output/recording.mp3";
+                }
+                break;
+            case '4': {
+                Config meterConfig = config;
+                meterConfig.meterSeconds = kMenuMeterSeconds;
+                runLevelMeter(mic, meterConfig);
+                break;
+            }
+            case '5': {
+                const int rc = (config.mode == RunMode::kRecordMp3)
+                                   ? runRecordMp3Mode(mic, config)
+                                   : runRecordMode(mic, config);
+                if (rc == 0) {
+                    std::printf("\nRecorded OK. Press Enter to return to the menu...");
+                    std::fflush(stdout);
+                    std::getline(std::cin, line);
+                    std::printf("\n");
+                }
+                break;
+            }
+            case '0':
+            case 'q':
+                std::printf("Bye.\n");
+                return 0;
+            default:
+                std::printf("  (invalid choice; try 1-5, 0/Q)\n");
+                break;
+        }
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -250,7 +393,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (config.showVersion) {
-        std::printf("inmp441_rpi 1.3.0\n");
+        std::printf("inmp441_rpi %s\n", kAppVersion);
         return 0;
     }
 
@@ -263,6 +406,9 @@ int main(int argc, char* argv[]) {
 
     int result = 0;
     switch (config.mode) {
+        case RunMode::kMenu:
+            result = runMenuMode(mic, config);
+            break;
         case RunMode::kInfo:
             runInfoMode(config);
             break;

@@ -33,6 +33,13 @@ void INMP441::close() {
     initialized_ = false;
 }
 
+void INMP441::setChannel(bool selectLeftChannel, bool driveLrSelectGpio) {
+    if (!initialized_) {
+        return;
+    }
+    controller_.setLrSelect(selectLeftChannel, driveLrSelectGpio);
+}
+
 size_t INMP441::readFrames(AudioFrame* frames, size_t frameCount) {
     if (!initialized_ || frameCount == 0) {
         return 0;

@@ -26,6 +26,11 @@ public:
     // Stops capture and releases hardware resources.
     void close();
 
+    // Changes the microphone channel without re-initialising the I2S master.
+    // Drives GPIO21 to match `selectLeftChannel` when `driveLrSelectGpio` is
+    // set, otherwise leaves the L/R pin as wired.
+    void setChannel(bool selectLeftChannel, bool driveLrSelectGpio);
+
     // Reads up to `frameCount` stereo frames. Each frame consumes two raw
     // slots (left then right). Returns the number of frames actually read.
     size_t readFrames(AudioFrame* frames, size_t frameCount);

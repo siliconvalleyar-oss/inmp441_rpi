@@ -4,28 +4,47 @@
 Usage: inmp441_rpi [options]
 
 Reads audio from an INMP441 MEMS microphone over the BCM2835 PCM/I2S
-peripheral and prints a live level meter, records WAV, or dumps raw slots.
+peripheral. By default it shows a console presentation and an interactive
+menu (duration/channel/format/record/level test). It can also run non-stop
+modes: live level meter, WAV/MP3 recording, or raw-slot dump.
 
 Options:
-  -m, --mode <level|wav|dump>  Mode: level meter (default), WAV record,
-                               or raw-slot dump.
-      --wav [FILE]             Alias for --mode wav (default FILE=capture.wav).
-      --dump [N]               Alias for --mode dump (default N=16 slots).
-  -f, --file <FILE>            WAV output path (default: capture.wav).
-  -r, --rate <HZ>              Sample rate: 8000,16000,32000,44100,48000
-                               (default: 48000).
-  -d, --duration <SEC>         Recording duration in seconds (default: 5).
-  -c, --channel <left|right>   I2S channel the mic is on (default: left).
-      --no-lr-gpio             Do NOT drive GPIO 21 (L/R pin). Use this if
-                               L/R is hard-wired to GND (left) or 3.3 V (right).
-  -v, --verbose                Verbose logging.
-  -h, --help                   Show this help and exit.
-      --version                Show version and exit.
+      --menu                 Interactive menu after a console presentation
+                             (this is the default).
+      --level                Live RMS/peak meter.
+      --wav [FILE]           Record audio to a 16-bit PCM WAV file
+                             (default: output/recording.wav).
+      --mp3 [FILE]           Record to a temp WAV then encode to MP3 with lame
+                             (default: output/recording.mp3).
+      --dump [N]             Dump N raw 32-bit I2S words and exit (default 16).
+      --info                 Print hardware/configuration info and exit.
+  -r, --rate <HZ>            Sample rate: 8000,16000,32000,44100,48000
+                             (default: 48000).
+  -d, --duration <SEC>       Recording duration in seconds (default: 5, min 1).
+      --warmup <SEC>         Seconds of audio discarded before recording
+                             (default: 4; removes the I2S startup transient,
+                             set 0 to disable).
+  -c, --channel <left|right> I2S channel the mic is on (default: left).
+      --no-lr-gpio           Do NOT drive GPIO 21 (L/R pin). Use this if
+                             L/R is hard-wired to GND (left) or 3.3 V (right).
+  -v, --verbose              Verbose logging.
+  -h, --help                 Show this help and exit.
+      --version              Show version and exit.
 ```
 
 ## Modes
 
-### `level` (default)
+### `menu` (default)
+
+Shows a hardware presentation followed by an interactive menu. Options:
+duration (min 5 s for test recordings by default), channel left/right,
+output format WAV/MP3, a 5-second level test, and record.
+
+```bash
+sudo ./bin/inmp441_rpi
+```
+
+### `level`
 
 Shows a live ASCII meter: a 40-cell bar plus RMS and peak levels in dBFS,
 refreshed several times per second. Press **Ctrl+C** to stop.
@@ -41,7 +60,15 @@ PCM **16-bit mono** by default. Use `--rate` for sample rate.
 
 ```bash
 sudo ./bin/inmp441_rpi --wav mic.wav -d 10
-sudo ./bin/inmp441_rpi --mode wav --file test.wav --rate 44100 --duration 5
+sudo ./bin/inmp441_rpi --wav --file test.wav --rate 44100 --duration 5
+```
+
+### `mp3`
+
+Same as `wav`, but transcodes with `lame` after recording.
+
+```bash
+sudo ./bin/inmp441_rpi --mp3 test.mp3 -d 5
 ```
 
 ### `dump`

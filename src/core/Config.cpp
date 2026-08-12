@@ -71,7 +71,9 @@ Config parseArgs(int argc, char* argv[]) {
             config.valid = true;
             return config;
         }
-        if (arg == "--level") {
+        if (arg == "--menu") {
+            config.mode = RunMode::kMenu;
+        } else if (arg == "--level") {
             config.mode = RunMode::kLevelMeter;
         } else if (arg == "--wav") {
             config.mode = RunMode::kRecordWav;
@@ -107,6 +109,13 @@ Config parseArgs(int argc, char* argv[]) {
             if (i + 1 >= args.size() || !parseUint32(args[i + 1].c_str(), &config.sampleRate)) {
                 config.valid = false;
                 config.error = "--rate requires a numeric value (Hz)";
+                return config;
+            }
+            ++i;
+        } else if (arg == "--warmup") {
+            if (i + 1 >= args.size() || !parseDouble(args[i + 1].c_str(), &config.warmupSeconds)) {
+                config.valid = false;
+                config.error = "--warmup requires a numeric value (seconds)";
                 return config;
             }
             ++i;
@@ -162,8 +171,10 @@ void printUsage() {
         "\n"
         "Usage: inmp441_rpi [options]\n"
         "\n"
-        "Modes (default: level meter):\n"
-        "  --level                 Live RMS/peak meter (default)\n"
+        "Modes (default: interactive menu):\n"
+        "  --menu                  Interactive menu after a console presentation\n"
+        "                          (duration/channel/format, record, level test)\n"
+        "  --level                 Live RMS/peak meter\n"
         "  --wav [file.wav]        Record audio to a 16-bit PCM WAV file\n"
         "                          (default: output/recording.wav)\n"
         "  --mp3 [file.mp3]        Record to a temp WAV then encode to MP3\n"
@@ -173,7 +184,10 @@ void printUsage() {
         "\n"
         "Options:\n"
         "  -r, --rate <hz>         Sample rate (default 48000)\n"
-        "  -d, --duration <sec>    Recording duration (default 5)\n"
+        "  -d, --duration <sec>    Recording duration (default 5, min 1)\n"
+        "      --warmup <sec>       Seconds of audio discarded before recording\n"
+        "                          (default 4; removes the I2S startup transient;\n"
+        "                           set 0 to disable)\n"
         "  -c, --channel <lr>      Mic channel and I2S slot to read:\n"
         "                          'left' (L/R pin -> GND) or 'right' (L/R pin\n"
         "                          -> +3V3). Also drives GPIO21 to match.\n"
