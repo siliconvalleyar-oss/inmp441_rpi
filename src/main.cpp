@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -22,6 +24,7 @@ using core::Config;
 using core::LogLevel;
 using core::Logger;
 using core::RunMode;
+using INMP441::Inmp441_t;
 
 // Frames fetched per I2S read burst (~5 ms at 48 kHz).
 constexpr size_t kChunkFrames = 240;
@@ -81,7 +84,7 @@ void runInfoMode(const Config& config) {
     std::printf("  run as root     : yes (required by bcm2835)\n");
 }
 
-int runLevelMeter(audio::INMP441& mic, const Config& config) {    Logger& log = Logger::instance();
+int runLevelMeter(Inmp441_t& mic, const Config& config) {    Logger& log = Logger::instance();
     audio::RmsAnalyzer analyzer;
     std::vector<audio::AudioFrame> frames(kChunkFrames);
 
@@ -120,7 +123,7 @@ int runLevelMeter(audio::INMP441& mic, const Config& config) {    Logger& log = 
 }
 
 // Records `durationSeconds` of audio to a 16-bit WAV file at `path`.
-bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::string& path) {
+bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& path) {
     Logger& log = Logger::instance();
 
     audio::WaveWriter writer(path, config.sampleRate, config.recordStereo);
@@ -285,7 +288,7 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
     return true;
 }
 
-int runRecordMode(audio::INMP441& mic, const Config& config) {
+int runRecordMode(Inmp441_t& mic, const Config& config) {
     Logger& log = Logger::instance();
 
     if (!ensureParentDirectory(config.outputFile)) {
@@ -299,7 +302,7 @@ int runRecordMode(audio::INMP441& mic, const Config& config) {
     return 0;
 }
 
-int runRecordMp3Mode(audio::INMP441& mic, const Config& config) {
+int runRecordMp3Mode(Inmp441_t& mic, const Config& config) {
     Logger& log = Logger::instance();
 
     if (!ensureParentDirectory(config.outputFile)) {
@@ -332,7 +335,7 @@ int runRecordMp3Mode(audio::INMP441& mic, const Config& config) {
     return 0;
 }
 
-int runDumpMode(audio::INMP441& mic, const Config& config) {
+int runDumpMode(Inmp441_t& mic, const Config& config) {
     std::vector<uint32_t> words(config.dumpWordCount);
     const size_t read = mic.readRawWords(words.data(), words.size());
 
@@ -349,18 +352,28 @@ int runDumpMode(audio::INMP441& mic, const Config& config) {
 }
 
 // Interactive menu shown after a console presentation. Lets the operator
-// configure the recording duration (min 5 s by default), channel, output
-// format and file, then record or run a bounded level test.
-int runMenuMode(audio::INMP441& mic, const Config& initial) {
+// configure the recording duration, channel, gain, output format and file,
+// then record or run a bounded level test. Every change is persisted to the
+// JSON config file automatically.
+int runMenuMode(Inmp441_t& mic, const Config& initial) {
     Logger& log = Logger::instance();
     Config config = initial;
-    config.mode = RunMode::kRecordWav;
+    config.mode = config.recordMp3 ? RunMode::kRecordMp3 : RunMode::kRecordWav;
 
     // The interactive menu has no file option: always record to a fresh
     // timestamped name (recording_YYYYMMDDHHMM.<ext>).
     if (config.outputFile.empty()) {
         config.outputFile = core::defaultOutputName("wav");
     }
+
+    // Persists the current settings; called after every menu change.
+    auto persistConfig = [&config, &log]() {
+        if (core::saveConfig(config, config.configFile)) {
+            log.info("configuration saved to %s", config.configFile.c_str());
+        } else {
+            log.error("failed to save configuration to %s", config.configFile.c_str());
+        }
+    };
 
     while (true) {
         std::printf("\n");
@@ -373,18 +386,20 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
         std::printf("  Channel : %s (L/R pin -> %s)\n",
                     config.selectLeftChannel ? "left" : "right",
                     config.selectLeftChannel ? "GND" : "+3V3");
+        std::printf("  Gain    : %+.1f dB\n", config.gainDb);
         std::printf("  Format  : %s\n",
                     config.mode == RunMode::kRecordMp3 ? "MP3 (lame)" : "WAV");
         std::printf("  File    : %s\n", config.outputFile.c_str());
+        std::printf("  Config  : %s\n", config.configFile.c_str());
         std::printf("------------------------------------------------------------\n");
-        std::printf("  1) Duration ....... %g s (min 5 s for test recordings)\n",
-                    config.durationSeconds);
+        std::printf("  1) Duration ....... %g s (min 1)\n", config.durationSeconds);
         std::printf("  2) Channel ........ %s\n",
                     config.selectLeftChannel ? "left" : "right");
-        std::printf("  3) Format ......... %s\n",
+        std::printf("  3) Gain ........... %+.1f dB\n", config.gainDb);
+        std::printf("  4) Format ......... %s\n",
                     config.mode == RunMode::kRecordMp3 ? "MP3" : "WAV");
-        std::printf("  4) Level test ..... live meter for %g s\n", kMenuMeterSeconds);
-        std::printf("  5) RECORD\n");
+        std::printf("  5) Level test ..... live meter for %g s\n", kMenuMeterSeconds);
+        std::printf("  6) RECORD\n");
         std::printf("  0/Q) Quit\n");
         std::printf("------------------------------------------------------------\n");
         std::printf("Choice> ");
@@ -412,6 +427,7 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
                     const double d = std::strtod(value.c_str(), &end);
                     if (end != value.c_str() && *end == '\0' && d >= 1.0) {
                         config.durationSeconds = d;
+                        persistConfig();
                     } else {
                         std::printf("  (ignored: must be a number >= 1)\n");
                     }
@@ -424,23 +440,48 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
                 log.info("channel set to %s (L/R pin -> %s)",
                          config.selectLeftChannel ? "left" : "right",
                          config.selectLeftChannel ? "GND" : "+3V3");
+                persistConfig();
                 break;
-            case '3':
+            case '3': {
+                std::printf("Gain in dB (e.g. 24 close talk, 40 room; +-%.0f max) [%+.1f]> ",
+                            core::kMaxGainDb, config.gainDb);
+                std::fflush(stdout);
+                std::string value;
+                std::getline(std::cin, value);
+                if (!value.empty()) {
+                    char* end = nullptr;
+                    const double d = std::strtod(value.c_str(), &end);
+                    if (end != value.c_str() && *end == '\0') {
+                        config.gainDb = core::clampGainDb(d);
+                        if (config.gainDb != d) {
+                            std::printf("  (clamped to %+.1f dB)\n", config.gainDb);
+                        }
+                        persistConfig();
+                    } else {
+                        std::printf("  (ignored: must be a number)\n");
+                    }
+                }
+                break;
+            }
+            case '4':
                 if (config.mode == RunMode::kRecordMp3) {
                     config.mode = RunMode::kRecordWav;
+                    config.recordMp3 = false;
                     config.outputFile = core::defaultOutputName("wav");
                 } else {
                     config.mode = RunMode::kRecordMp3;
+                    config.recordMp3 = true;
                     config.outputFile = core::defaultOutputName("mp3");
                 }
+                persistConfig();
                 break;
-            case '4': {
+            case '5': {
                 Config meterConfig = config;
                 meterConfig.meterSeconds = kMenuMeterSeconds;
                 runLevelMeter(mic, meterConfig);
                 break;
             }
-            case '5': {
+            case '6': {
                 // Show the live VU meter while recording from the menu.
                 config.showRecordMeter = true;
                 const int rc = (config.mode == RunMode::kRecordMp3)
@@ -459,7 +500,7 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
                 std::printf("Bye.\n");
                 return 0;
             default:
-                std::printf("  (invalid choice; try 1-5, 0/Q)\n");
+                std::printf("  (invalid choice; try 1-6, 0/Q)\n");
                 break;
         }
     }
@@ -469,9 +510,29 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    Config config = core::parseArgs(argc, argv);
-
     Logger& log = Logger::instance();
+
+    // Cheap pre-scan: --help/--version must not touch the config file, and
+    // --config tells us where the persisted settings live.
+    bool wantsHelpOrVersion = false;
+    std::string configPath = "config.json";
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help" || arg == "--version") {
+            wantsHelpOrVersion = true;
+        } else if (arg == "--config" && i + 1 < argc && argv[i + 1] != nullptr) {
+            configPath = argv[i + 1];
+        }
+    }
+
+    // Persisted settings are loaded as base defaults; CLI options take
+    // precedence over them.
+    Config base;
+    if (!wantsHelpOrVersion) {
+        core::loadConfig(base, configPath);
+    }
+
+    Config config = core::parseArgs(argc, argv, base);
     log.setLevel(config.verbose ? LogLevel::kDebug : LogLevel::kInfo);
 
     if (!config.valid) {
@@ -489,35 +550,52 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // Persist the effective settings when requested (--save-config). The
+    // interactive menu also saves on every change.
+    if (config.saveConfigRequested) {
+        if (!core::saveConfig(config, config.configFile)) {
+            return 1;
+        }
+        log.info("configuration saved to %s", config.configFile.c_str());
+    }
+
     core::SignalHandler::install();
 
-    audio::INMP441 mic;
-    if (!mic.init(config.sampleRate, config.selectLeftChannel, config.driveLrSelectGpio)) {
+    // RAII microphone handle: the constructor opens the I2S master and throws
+    // on failure; the destructor shuts the hardware down when `mic` leaves
+    // scope, so nothing needs to be closed explicitly at exit.
+    std::unique_ptr<Inmp441_t> mic;
+    try {
+        mic = std::make_unique<Inmp441_t>(config.sampleRate,
+                                          config.selectLeftChannel,
+                                          config.driveLrSelectGpio);
+    } catch (const std::runtime_error& e) {
+        log.error("cannot open microphone: %s", e.what());
         return 1;
     }
 
     int result = 0;
     switch (config.mode) {
         case RunMode::kMenu:
-            result = runMenuMode(mic, config);
+            result = runMenuMode(*mic, config);
             break;
         case RunMode::kInfo:
             runInfoMode(config);
             break;
         case RunMode::kLevelMeter:
-            result = runLevelMeter(mic, config);
+            result = runLevelMeter(*mic, config);
             break;
         case RunMode::kRecordWav:
-            result = runRecordMode(mic, config);
+            result = runRecordMode(*mic, config);
             break;
         case RunMode::kRecordMp3:
-            result = runRecordMp3Mode(mic, config);
+            result = runRecordMp3Mode(*mic, config);
             break;
         case RunMode::kDumpRawWords:
-            result = runDumpMode(mic, config);
+            result = runDumpMode(*mic, config);
             break;
     }
 
-    mic.close();
+    // `mic` (unique_ptr) destroys the Inmp441_t here, releasing the hardware.
     return result;
 }

@@ -79,7 +79,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential \
     git \
     wget \
-    curl
+    curl \
+    nlohmann-json3-dev
 
 log "Installing lame (MP3 encoder for --mp3 mode)..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y lame

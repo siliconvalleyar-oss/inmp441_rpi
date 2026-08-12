@@ -40,6 +40,11 @@ its own file. An explicit `--wav mic.wav` / `--mp3 test.mp3` is kept as-is.
                              The menu's RECORD option enables this automatically.
       --no-lr-gpio           Do NOT drive GPIO 21 (L/R pin). Use this if
                              L/R is hard-wired to GND (left) or 3.3 V (right).
+      --config <FILE>        JSON configuration file to load/save
+                             (default: config.json in the project directory).
+      --save-config          Save the current settings to the config file
+                             and continue. The interactive menu also saves
+                             automatically on every change.
   -v, --verbose              Verbose logging.
   -h, --help                 Show this help and exit.
       --version              Show version and exit.
@@ -116,6 +121,43 @@ When the mic is silent the slots read ≈ `0x00000000`; speaking produces values
 across the full range. If your board deviates (e.g. a shift of one bit), open
 `src/audio/I2SController.cpp` and adjust the I2S data-delay (`CHxPOS`) or the
 conversion in `SampleFormat.hpp`, then rebuild.
+
+## Persisted configuration
+
+The application persists its settings to a JSON file (`config.json` by default,
+overridable with `--config`):
+
+- **Sample rate, channel, stereo, duration, warmup, gain, dropout threshold,
+  meter interval and menu format (WAV/MP3)**.
+- Settings are **loaded at startup** and used as defaults; command-line
+  options always override the file.
+- They are **saved** with `--save-config` or automatically every time an
+  option is changed in the interactive menu.
+- `config.json` is gitignored and is not part of the repository.
+
+Example:
+
+```json
+{
+  "sample_rate": 48000,
+  "left_channel": true,
+  "stereo": false,
+  "duration_seconds": 10.0,
+  "warmup_seconds": 4.0,
+  "gain_db": 24.0,
+  "dropout_seconds": 1.0,
+  "meter_interval_ms": 120.0,
+  "format": "wav"
+}
+```
+
+```bash
+# Save the current CLI settings
+sudo ./bin/inmp441_rpi --gain 24 --save-config
+
+# Use an alternative config file
+sudo ./bin/inmp441_rpi --config /etc/inmp441_rpi.json --level
+```
 
 ## Notes
 

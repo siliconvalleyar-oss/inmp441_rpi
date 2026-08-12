@@ -33,6 +33,10 @@ struct Config {
     uint32_t dumpWordCount = 16;     // words printed by --dump
     double meterIntervalMs = 120.0;  // refresh period of the level meter
     double meterSeconds = 0.0;       // level meter duration; 0 = until Ctrl+C
+    // Persisted settings (JSON, see loadConfig/saveConfig).
+    std::string configFile = "config.json";  // path used by --config / menu auto-save
+    bool saveConfigRequested = false;         // --save-config: persist the CLI config
+    bool recordMp3 = false;                   // menu format preference ("format" in JSON)
     bool showHelp = false;           // --help / -h requested (exit before init)
     bool showVersion = false;        // --version requested (exit before init)
     bool valid = true;
@@ -49,9 +53,26 @@ constexpr bool isRecordMode(RunMode mode) {
     return mode == RunMode::kRecordWav || mode == RunMode::kRecordMp3;
 }
 
-// Parses the command line. On failure `valid` is set to false and `error`
-// contains a human-readable description.
-Config parseArgs(int argc, char* argv[]);
+// Sane range for the digital gain in dB (clamped at parse time).
+constexpr double kMaxGainDb = 60.0;
+
+inline double clampGainDb(double gainDb) {
+    return gainDb < -kMaxGainDb ? -kMaxGainDb : (gainDb > kMaxGainDb ? kMaxGainDb : gainDb);
+}
+
+// Loads persisted settings from `path` into `config` (only the fields stored
+// by saveConfig). Returns false when the file is missing or invalid; in that
+// case the caller keeps its current values. Logs a message either way.
+bool loadConfig(Config& config, const std::string& path);
+
+// Writes the persisted settings of `config` to `path` as pretty-printed JSON.
+// Returns false on I/O errors.
+bool saveConfig(const Config& config, const std::string& path);
+
+// Parses the command line on top of `base` (defaults, already overlaid with
+// any persisted JSON settings). On failure `valid` is set to false and
+// `error` contains a human-readable description.
+Config parseArgs(int argc, char* argv[], const Config& base = Config());
 
 void printUsage();
 
