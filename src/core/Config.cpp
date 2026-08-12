@@ -62,8 +62,12 @@ Config parseArgs(int argc, char* argv[]) {
         const std::string& arg = args[i];
 
         if (arg == "-h" || arg == "--help") {
-            config.mode = RunMode::kInfo;
-            printUsage();
+            config.showHelp = true;
+            config.valid = true;
+            return config;
+        }
+        if (arg == "--version") {
+            config.showVersion = true;
             config.valid = true;
             return config;
         }
@@ -165,6 +169,7 @@ void printUsage() {
         "                          with a single microphone)\n"
         "  --no-lr-gpio            Do not drive GPIO21 (leave L/R pin as wired)\n"
         "  -v, --verbose           Verbose (debug) logging\n"
+        "  --version               Show version and exit\n"
         "  -h, --help              Show this help\n"
         "\n"
         "Notes:\n"

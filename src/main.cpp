@@ -157,6 +157,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (config.showHelp) {
+        core::printUsage();
+        return 0;
+    }
+    if (config.showVersion) {
+        std::printf("inmp441_rpi 1.0.0\n");
+        return 0;
+    }
+
     core::SignalHandler::install();
 
     audio::INMP441 mic;

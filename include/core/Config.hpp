@@ -24,6 +24,8 @@ struct Config {
     bool verbose = false;
     uint32_t dumpWordCount = 16;     // words printed by --dump
     double meterIntervalMs = 120.0;  // refresh period of the level meter
+    bool showHelp = false;           // --help / -h requested (exit before init)
+    bool showVersion = false;        // --version requested (exit before init)
     bool valid = true;
     std::string error;
 };

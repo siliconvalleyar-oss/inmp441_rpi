@@ -2,6 +2,7 @@
 
 #include <bcm2835.h>
 
+#include <chrono>
 #include <cstring>
 #include <sys/types.h>
 #include <unistd.h>
@@ -117,6 +118,11 @@ volatile uint32_t* I2SController::reg(uint32_t offset) {
         reinterpret_cast<uint8_t*>(bcm2835_peripherals) + kPcmBase + offset);
 }
 
+volatile uint32_t* I2SController::cmReg(uint32_t offset) {
+    return reinterpret_cast<volatile uint32_t*>(
+        reinterpret_cast<uint8_t*>(bcm2835_peripherals) + kClockBase + offset);
+}
+
 uint32_t I2SController::readReg(uint32_t offset) {
     return bcm2835_peri_read(reg(offset));
 }
@@ -148,24 +154,24 @@ bool I2SController::configureClock(uint32_t sampleRateHz, uint32_t* diviOut,
         return false;
     }
 
-    const uint32_t divBase = kClockBase + kRegCmPcmCtl;
-    const uint32_t divRegBase = kClockBase + kRegCmPcmDiv;
     const uint32_t srcField = kCmSrcOsc;
+    volatile uint32_t* ctl = cmReg(kRegCmPcmCtl);
+    volatile uint32_t* div = cmReg(kRegCmPcmDiv);
 
     // 1) Disable the clock and wait for BUSY to clear.
-    writeReg(divBase, kCmPassword | srcField);
+    bcm2835_peri_write(ctl, kCmPassword | srcField);
     for (uint32_t i = 0; i < kBusyWaitMs; ++i) {
-        if ((readReg(divBase) & kCmBusy) == 0) {
+        if ((bcm2835_peri_read(ctl) & kCmBusy) == 0) {
             break;
         }
         bcm2835_delay(1);
     }
 
     // 2) Program the integer + fractional divider.
-    writeReg(divRegBase, kCmPassword | (divi << kCmDivShift) | divf);
+    bcm2835_peri_write(div, kCmPassword | (divi << kCmDivShift) | divf);
 
     // 3) Re-enable with the fractional flag when needed.
-    writeReg(divBase, kCmPassword | srcField | (divf != 0 ? kCmFrac : 0U) | kCmEnable);
+    bcm2835_peri_write(ctl, kCmPassword | srcField | (divf != 0 ? kCmFrac : 0U) | kCmEnable);
 
     *diviOut = divi;
     *divfOut = divf;
@@ -262,10 +268,10 @@ void I2SController::shutdown() {
     writeReg(kRegCs, 0);
 
     // Disable the PCM clock.
-    const uint32_t ctl = kClockBase + kRegCmPcmCtl;
-    writeReg(ctl, kCmPassword | kCmSrcOsc);
+    volatile uint32_t* ctl = cmReg(kRegCmPcmCtl);
+    bcm2835_peri_write(ctl, kCmPassword | kCmSrcOsc);
     for (uint32_t i = 0; i < kBusyWaitMs; ++i) {
-        if ((readReg(ctl) & kCmBusy) == 0) {
+        if ((bcm2835_peri_read(ctl) & kCmBusy) == 0) {
             break;
         }
         bcm2835_delay(1);
@@ -286,13 +292,20 @@ size_t I2SController::readRaw(uint32_t* buffer, size_t maxWords) {
         return 0;
     }
 
+    // Rate-limit the RX timeout warning to avoid log flooding.
+    static auto lastRxWarn = std::chrono::steady_clock::time_point{};
+
     size_t words = 0;
     while (words < maxWords) {
         // Wait for at least one word in the RX FIFO.
         uint32_t spins = 0;
         while ((readReg(kRegCs) & kCsRxd) == 0) {
             if (++spins > 1000000) {
-                core::Logger::instance().warning("RX FIFO timeout waiting for data");
+                const auto now = std::chrono::steady_clock::now();
+                if (now - lastRxWarn > std::chrono::seconds(1)) {
+                    lastRxWarn = now;
+                    core::Logger::instance().warning("RX FIFO timeout waiting for data");
+                }
                 return words;
             }
         }

@@ -36,7 +36,8 @@ public:
     static const char* boardInfo();
 
 private:
-    static volatile uint32_t* reg(uint32_t offset);
+    static volatile uint32_t* reg(uint32_t offset);      // PCM peripheral regs
+    static volatile uint32_t* cmReg(uint32_t offset);    // clock manager regs
     static uint32_t readReg(uint32_t offset);
     static void writeReg(uint32_t offset, uint32_t value);
 
