@@ -16,6 +16,11 @@ Options:
                              (default: output/recording_YYYYMMDDHHMM.wav).
       --mp3 [FILE]           Record to a temp WAV then encode to MP3 with lame
                              (default: output/recording_YYYYMMDDHHMM.mp3).
+      --player               Play the WAV/MP3 files found in output/ over
+                             Bluetooth A2DP (bluetoothctl + PulseAudio).
+      --bt-mac <MAC>         Bluetooth A2DP speaker MAC, e.g.
+                             --bt-mac AA:BB:CC:DD:EE:FF. If empty, the first
+                             paired device is used automatically.
 
 When no file name is given, the default includes a local-time stamp down to
 the minute, e.g. `output/recording_202608121137.wav`, so each recording gets
@@ -89,6 +94,20 @@ Same as `wav`, but transcodes with `lame` after recording.
 sudo ./bin/inmp441_rpi --mp3 test.mp3 -d 5
 ```
 
+### `player` (play output/ over Bluetooth)
+
+Scans the `output/` directory for `*.wav` and `*.mp3` files, connects the
+Bluetooth speaker (A2DP) and shows a full-screen player:
+
+```bash
+sudo ./bin/inmp441_rpi --player
+sudo ./bin/inmp441_rpi --player --bt-mac AA:BB:CC:DD:EE:FF
+```
+
+Keys: `w`/`s` or arrows to change track, `space`/`p` play-pause, `+`/`-`
+volume, `q` to quit. The track name also scrolls on the OLED (if wired).
+The same screen is available from the interactive menu as **option 7**.
+
 ### `dump`
 
 Prints raw 32-bit I2S slots (pairs = one frame) and exits. Useful for
@@ -128,7 +147,7 @@ The application persists its settings to a JSON file (`config.json` by default,
 overridable with `--config`):
 
 - **Sample rate, channel, stereo, duration, warmup, gain, dropout threshold,
-  meter interval and menu format (WAV/MP3)**.
+  meter interval, menu format (WAV/MP3) and Bluetooth MAC** (`bt_mac`).
 - Settings are **loaded at startup** and used as defaults; command-line
   options always override the file.
 - They are **saved** with `--save-config` or automatically every time an
@@ -147,7 +166,8 @@ Example:
   "gain_db": 24.0,
   "dropout_seconds": 1.0,
   "meter_interval_ms": 120.0,
-  "format": "wav"
+  "format": "wav",
+  "bt_mac": "AA:BB:CC:DD:EE:FF"
 }
 ```
 

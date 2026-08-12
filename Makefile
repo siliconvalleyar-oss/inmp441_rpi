@@ -28,8 +28,9 @@ BCM2835_INCLUDE ?= /usr/local/include
 WARNINGS   := -Wall -Wextra -Wpedantic -Wshadow
 OPT_FLAGS  := -O2
 CXXFLAGS   := $(OPT_FLAGS) -std=$(CXXSTD) $(WARNINGS) -I$(INC_DIR) \
+              -I$(INC_DIR)/oled -I$(INC_DIR)/sound -I$(INC_DIR)/tools \
               -I$(BCM2835_INCLUDE) -MMD -MP
-LDLIBS     := -lbcm2835
+LDLIBS     := -lbcm2835 -lmpg123 -lao
 BCM2835_LIB ?= $(LDLIBS)
 LDFLAGS    := $(BCM2835_LIB) -lm -pthread
 

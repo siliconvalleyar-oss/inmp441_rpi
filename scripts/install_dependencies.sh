@@ -80,10 +80,19 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     git \
     wget \
     curl \
-    nlohmann-json3-dev
+    nlohmann-json3-dev \
+    libmpg123-dev \
+    libao-dev
 
 log "Installing lame (MP3 encoder for --mp3 mode)..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y lame
+
+log "Installing runtime tools (Bluetooth A2DP + PulseAudio for --player)..."
+# Nota: bluetoothctl lo provee el paquete bluez, no es un paquete aparte.
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    bluez \
+    pulseaudio \
+    pulseaudio-module-bluetooth
 
 # ---------------------------------------------------------------------------
 # bcm2835 library

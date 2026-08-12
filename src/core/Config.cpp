@@ -90,6 +90,7 @@ bool loadConfig(Config& config, const std::string& path) {
         config.dropoutThresholdSeconds = j.value("dropout_seconds", config.dropoutThresholdSeconds);
         config.meterIntervalMs = j.value("meter_interval_ms", config.meterIntervalMs);
         config.recordMp3 = (j.value("format", std::string("wav")) == "mp3");
+        config.btMac = j.value("bt_mac", config.btMac);
     } catch (const nlohmann::json::exception& e) {
         core::Logger::instance().warning(
             "config file '%s' is invalid, using defaults (%s)",
@@ -112,6 +113,7 @@ bool saveConfig(const Config& config, const std::string& path) {
     j["dropout_seconds"] = config.dropoutThresholdSeconds;
     j["meter_interval_ms"] = config.meterIntervalMs;
     j["format"] = config.recordMp3 ? "mp3" : "wav";
+    j["bt_mac"] = config.btMac;
 
     std::ofstream file(path);
     if (!file.is_open()) {
@@ -169,6 +171,15 @@ Config parseArgs(int argc, char* argv[], const Config& base) {
                     ++i;
                 }
             }
+        } else if (arg == "--player") {
+            config.mode = RunMode::kPlayer;
+        } else if (arg == "--bt-mac") {
+            if (i + 1 >= args.size()) {
+                config.valid = false;
+                config.error = "--bt-mac requires a MAC address (XX:XX:XX:XX:XX:XX)";
+                return config;
+            }
+            config.btMac = args[++i];
         } else if (arg == "--info") {
             config.mode = RunMode::kInfo;
         } else if (arg == "--duration" || arg == "-d") {
@@ -284,7 +295,10 @@ void printUsage() {
         "\n"
         "Modes (default: interactive menu):\n"
         "  --menu                  Interactive menu after a console presentation\n"
-        "                          (duration/channel/format, record, level test)\n"
+        "                          (duration/channel/format, record, level test,\n"
+        "                           play output/ files over Bluetooth)\n"
+        "  --player                Play the WAV/MP3 files found in output/\n"
+        "                          (Bluetooth A2DP via bluetoothctl + PulseAudio)\n"
         "  --level                 Live RMS/peak meter\n"
         "  --wav [file.wav]        Record audio to a 16-bit PCM WAV file\n"
         "                          (default: output/recording_YYYYMMDDHHMM.wav)\n"
@@ -319,14 +333,18 @@ void printUsage() {
         "      --save-config       Persist the current settings to the config\n"
         "                          file (also done automatically when changing\n"
         "                          options in the interactive menu)\n"
+        "      --bt-mac <mac>      Bluetooth A2DP speaker MAC, e.g.\n"
+        "                          --bt-mac AA:BB:CC:DD:EE:FF. Saved as bt_mac\n"
+        "                          in the config file; if empty, the first\n"
+        "                          paired device is used automatically.\n"
         "  -v, --verbose           Verbose (debug) logging\n"
         "  --version               Show version and exit\n"
         "  -h, --help              Show this help\n"
         "\n"
         "Persisted settings:\n"
         "  sample rate, channel, stereo, duration, warmup, gain, dropout\n"
-        "  threshold, meter interval and menu format (WAV/MP3). CLI options\n"
-        "  always override the config file.\n"
+        "  threshold, meter interval, menu format (WAV/MP3) and Bluetooth\n"
+        "  MAC. CLI options always override the config file.\n"
         "\n"
         "Notes:\n"
         "  * Must run as root (the bcm2835 library needs /dev/mem access).\n"

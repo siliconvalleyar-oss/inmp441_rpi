@@ -12,6 +12,7 @@ enum class RunMode {
     kRecordWav,    // record N seconds to a WAV file
     kRecordMp3,    // record N seconds to a WAV then encode to MP3 (lame)
     kDumpRawWords, // print N raw 32-bit I2S words (debug / alignment check)
+    kPlayer,       // play the WAV/MP3 files in output/ (menu or --player)
     kInfo,         // print hardware / configuration info and exit
 };
 
@@ -37,6 +38,7 @@ struct Config {
     std::string configFile = "config.json";  // path used by --config / menu auto-save
     bool saveConfigRequested = false;         // --save-config: persist the CLI config
     bool recordMp3 = false;                   // menu format preference ("format" in JSON)
+    std::string btMac;                        // Bluetooth A2DP speaker MAC ("bt_mac" in JSON)
     bool showHelp = false;           // --help / -h requested (exit before init)
     bool showVersion = false;        // --version requested (exit before init)
     bool valid = true;
