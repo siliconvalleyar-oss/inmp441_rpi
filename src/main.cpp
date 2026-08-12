@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -40,7 +41,27 @@ using SOUND_LIST::TrackList;
 constexpr size_t kChunkFrames = 240;
 
 // Application version reported by --version and the menu banner.
-constexpr const char* kAppVersion = "1.7.1";
+constexpr const char* kAppVersion = "1.7.4";
+
+// Version shown at runtime: read from the VERSION file at the working
+// directory (the repo root when launched with make run), so the menu banner
+// always reflects the tagged release. Falls back to the compiled-in constant
+// when the file is missing or unreadable.
+const char* appVersion() {
+    static std::string version;
+    if (version.empty()) {
+        std::ifstream file("VERSION");
+        std::string line;
+        if (file && std::getline(file, line)) {
+            const size_t first = line.find_first_not_of(" \t\r\n");
+            const size_t last = line.find_last_not_of(" \t\r\n");
+            if (first != std::string::npos && last >= first) {
+                version = line.substr(first, last - first + 1);
+            }
+        }
+    }
+    return version.empty() ? kAppVersion : version.c_str();
+}
 
 // Level test duration used by the interactive menu.
 constexpr double kMenuMeterSeconds = 5.0;
@@ -177,11 +198,25 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
     const float gain =
         (config.gainDb == 0.0f) ? 1.0f : std::pow(10.0f, static_cast<float>(config.gainDb) / 20.0f);
 
-    auto toInt16 = [gain](int16_t sample) -> int16_t {
+    // One-pole DC blocker (high-pass ~30 Hz). The INMP441 outputs a small DC
+    // offset; the digital gain would amplify that constant into a huge
+    // excursion that saturates (clips) the recording - the harsh "noise" heard
+    // at high gain settings. Removing the DC first lets the gain amplify only
+    // the acoustic waveform. Runs only when gain is applied.
+    const double dcR = 1.0 - 2.0 * M_PI * 30.0 / static_cast<double>(config.sampleRate);
+    double dcPrevX = 0.0;
+    double dcPrevY = 0.0;
+
+    auto toInt16 = [gain, dcR, &dcPrevX, &dcPrevY](int16_t sample) -> int16_t {
         if (gain == 1.0f) {
             return sample;
         }
-        long v = static_cast<long>(sample * gain);
+        const double x = static_cast<double>(sample) / 32768.0;
+        const double y = x - dcPrevX + dcR * dcPrevY;  // y = x - x[n-1] + R*y[n-1]
+        dcPrevX = x;
+        dcPrevY = y;
+        const double amplified = y * static_cast<double>(gain);
+        long v = static_cast<long>(amplified * 32768.0);
         if (v > 32767L) {
             v = 32767L;
         } else if (v < -32768L) {
@@ -601,6 +636,32 @@ int runPlayerScreen(TrackList& tracks, Player& player, OledDisplay& oled,
 int runPlayerMode(const Config& config) {
     Logger& log = Logger::instance();
 
+    // El OLED (SSD1306 por I2C) usa la librería bcm2835, que necesita root.
+    // Se inicializa AQUÍ, ANTES de bajar privilegios para PulseAudio: un
+    // bcm2835_init() fallido (ejecutado como uid no-root) deja el estado
+    // global de la librería corrupto y bcm2835_close() del micrófono
+    // segfaulta al salir del proceso.
+    OledDisplay oled;
+    const bool oledReady = oled.init();
+    if (oledReady) {
+        oled.showMessage("inmp441 player", config.btMac);
+    }
+
+    // make run/run.sh lanzan la app con sudo (necesario para /dev/mem al
+    // grabar). PulseAudio es por-usuario y rechaza a root (Access denied):
+    // dropear privilegios al usuario real para que pactl y libao vean el
+    // sink Bluetooth, y restaurar root al salir de este modo.
+    const bool droppedPrivs = BluetoothTool::dropToPulseUser();
+    struct RestorePrivsGuard {
+        ~RestorePrivsGuard() {
+            if (dropped) {
+                BluetoothTool::restorePulseUser();
+            }
+        }
+        bool dropped = false;
+    } restoreGuard;
+    restoreGuard.dropped = droppedPrivs;
+
     TrackList tracks(TrackList::kDefaultDir);
     if (!tracks.load()) {
         return 1;
@@ -628,10 +689,6 @@ int runPlayerMode(const Config& config) {
     }
 
     Player player;
-    OledDisplay oled;
-    if (oled.init()) {
-        oled.showMessage("inmp441 player", mac);
-    }
 
     // The OledDisplay destructor powers the screen down; the microphone
     // owns the bcm2835 mapping, so nothing is closed here.
@@ -648,9 +705,11 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
     config.mode = config.recordMp3 ? RunMode::kRecordMp3 : RunMode::kRecordWav;
 
     // The interactive menu has no file option: always record to a fresh
-    // timestamped name (recording_YYYYMMDDHHMM.<ext>).
+    // timestamped name (recording_YYYYMMDDHHMM.<ext>), respecting the
+    // persisted format preference ("format" in config.json).
     if (config.outputFile.empty()) {
-        config.outputFile = core::defaultOutputName("wav");
+        config.outputFile =
+            core::defaultOutputName(config.recordMp3 ? "mp3" : "wav");
     }
 
     // Persists the current settings; called after every menu change.
@@ -665,7 +724,8 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
     while (true) {
         std::printf("\n");
         std::printf("============================================================\n");
-        std::printf("  inmp441_rpi %s - INMP441 I2S microphone recorder\n", kAppVersion);
+        std::printf("  inmp441_rpi %s - INMP441 I2S microphone recorder\n",
+                    appVersion());
         std::printf("============================================================\n");
         std::printf("  Board   : %s\n", audio::I2SController::boardInfo());
         std::printf("  Pins    : SCK=GPIO18  WS=GPIO19  SD=GPIO20\n");
@@ -843,7 +903,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (config.showVersion) {
-        std::printf("inmp441_rpi %s\n", kAppVersion);
+        std::printf("inmp441_rpi %s\n", appVersion());
         return 0;
     }
 
