@@ -5,8 +5,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <string>
+#include <sys/select.h>
 #include <sys/stat.h>
+#include <termios.h>
 #include <unistd.h>
 #include <vector>
 
@@ -15,6 +19,10 @@
 #include "core/Config.hpp"
 #include "core/Logger.hpp"
 #include "core/SignalHandler.hpp"
+#include "oled/oled_display.hpp"
+#include "sound/player.hpp"
+#include "sound/track_list.hpp"
+#include "tools/bluetooth_tool.hpp"
 
 namespace {
 
@@ -22,6 +30,11 @@ using core::Config;
 using core::LogLevel;
 using core::Logger;
 using core::RunMode;
+using INMP441::Inmp441_t;
+using BLUETOOTH::BluetoothTool;
+using OLED::OledDisplay;
+using PLAYER::Player;
+using SOUND_LIST::TrackList;
 
 // Frames fetched per I2S read burst (~5 ms at 48 kHz).
 constexpr size_t kChunkFrames = 240;
@@ -81,7 +94,7 @@ void runInfoMode(const Config& config) {
     std::printf("  run as root     : yes (required by bcm2835)\n");
 }
 
-int runLevelMeter(audio::INMP441& mic, const Config& config) {    Logger& log = Logger::instance();
+int runLevelMeter(Inmp441_t& mic, const Config& config) {    Logger& log = Logger::instance();
     audio::RmsAnalyzer analyzer;
     std::vector<audio::AudioFrame> frames(kChunkFrames);
 
@@ -120,7 +133,7 @@ int runLevelMeter(audio::INMP441& mic, const Config& config) {    Logger& log = 
 }
 
 // Records `durationSeconds` of audio to a 16-bit WAV file at `path`.
-bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::string& path) {
+bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& path) {
     Logger& log = Logger::instance();
 
     audio::WaveWriter writer(path, config.sampleRate, config.recordStereo);
@@ -285,7 +298,7 @@ bool recordWavToFile(audio::INMP441& mic, const Config& config, const std::strin
     return true;
 }
 
-int runRecordMode(audio::INMP441& mic, const Config& config) {
+int runRecordMode(Inmp441_t& mic, const Config& config) {
     Logger& log = Logger::instance();
 
     if (!ensureParentDirectory(config.outputFile)) {
@@ -299,7 +312,7 @@ int runRecordMode(audio::INMP441& mic, const Config& config) {
     return 0;
 }
 
-int runRecordMp3Mode(audio::INMP441& mic, const Config& config) {
+int runRecordMp3Mode(Inmp441_t& mic, const Config& config) {
     Logger& log = Logger::instance();
 
     if (!ensureParentDirectory(config.outputFile)) {
@@ -332,7 +345,7 @@ int runRecordMp3Mode(audio::INMP441& mic, const Config& config) {
     return 0;
 }
 
-int runDumpMode(audio::INMP441& mic, const Config& config) {
+int runDumpMode(Inmp441_t& mic, const Config& config) {
     std::vector<uint32_t> words(config.dumpWordCount);
     const size_t read = mic.readRawWords(words.data(), words.size());
 
@@ -348,19 +361,311 @@ int runDumpMode(audio::INMP441& mic, const Config& config) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Player UI: raw-key screen listing the WAV/MP3 files of output/, with OLED
+// status and PulseAudio volume control. Loops until 'q' / Ctrl+C.
+// ---------------------------------------------------------------------------
+
+// Terminal state for the player screen (raw keys, no Enter needed).
+struct termios g_savedTerm;
+bool g_termRaw = false;
+
+bool enableRawTerm() {
+    if (tcgetattr(STDIN_FILENO, &g_savedTerm) != 0) {
+        return false;
+    }
+    struct termios raw = g_savedTerm;
+    raw.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO));
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
+        return false;
+    }
+    g_termRaw = true;
+    return true;
+}
+
+void restoreRawTerm() {
+    if (g_termRaw) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &g_savedTerm);
+        g_termRaw = false;
+    }
+}
+
+// Internal key codes for arrow keys.
+constexpr int kKeyUp = -1;
+constexpr int kKeyDown = -2;
+constexpr int kKeyLeft = -3;
+constexpr int kKeyRight = -4;
+
+// Timeout of the key loop (ms): drives the OLED marquee refresh.
+constexpr int kPlayerKeyTimeoutMs = 250;
+
+// Reads one key; returns 0 when the timeout expires without input.
+int readPlayerKey(int timeoutMs) {
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    struct timeval tv{};
+    tv.tv_sec = timeoutMs / 1000;
+    tv.tv_usec = static_cast<suseconds_t>((timeoutMs % 1000) * 1000);
+
+    if (select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) <= 0) {
+        return 0;
+    }
+
+    unsigned char c = 0;
+    if (::read(STDIN_FILENO, &c, 1) != 1) {
+        return 0;
+    }
+
+    if (c == 0x1B) {  // escape sequence (arrow keys)
+        char seq[2];
+        if (::read(STDIN_FILENO, &seq[0], 1) != 1) return 0x1B;
+        if (::read(STDIN_FILENO, &seq[1], 1) != 1) return 0x1B;
+        if (seq[0] == '[') {
+            switch (seq[1]) {
+                case 'A': return kKeyUp;
+                case 'B': return kKeyDown;
+                case 'C': return kKeyRight;
+                case 'D': return kKeyLeft;
+                default: break;
+            }
+        }
+        return 0x1B;
+    }
+    return static_cast<int>(c);
+}
+
+// Runs a command and returns its standard output.
+std::string runCapture(const std::string& cmd) {
+    std::string out;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (pipe == nullptr) {
+        return out;
+    }
+    char buf[128];
+    while (std::fgets(buf, sizeof(buf), pipe) != nullptr) {
+        out += buf;
+    }
+    pclose(pipe);
+    return out;
+}
+
+// Volume (0-100) of the default PulseAudio sink, or -1 if unavailable.
+int readPulseVolume() {
+    const std::string out = runCapture(
+        "pactl list sinks 2>/dev/null | awk -F'/' '/Volume:/"
+        "{gsub(/ /,\"\",$2); print $2; exit}'");
+    const int v = std::atoi(out.c_str());
+    return (v >= 0 && v <= 100) ? v : -1;
+}
+
+// Player screen: lists the tracks of output/ and controls playback with
+// raw keys. Loops until 'q' or Ctrl+C; restores the terminal on exit.
+int runPlayerScreen(TrackList& tracks, Player& player, OledDisplay& oled,
+                    const std::string& deviceMac) {
+    Logger& log = Logger::instance();
+    if (tracks.empty()) {
+        log.error("no playable files in '%s'", tracks.directory().c_str());
+        return 1;
+    }
+
+    if (!enableRawTerm()) {
+        log.warning("terminal is not interactive; keys need Enter "
+                    "(use 'ssh -t' for the player screen)");
+    }
+
+    std::size_t cursor = 0;
+    int scrollOffset = 0;
+    int volume = readPulseVolume();
+    bool quit = false;
+
+    std::printf("\033[H\033[2J");
+    std::printf("=== Playback (output/) | Bluetooth: %s ===\n",
+                deviceMac.empty() ? "(none)" : deviceMac.c_str());
+    std::printf("  w/s or arrows: navigate   space/p: play/pause   "
+                "+/-: volume   q: quit\n\n");
+    std::fflush(stdout);
+
+    while (!quit) {
+        // Ctrl+C goes through core::SignalHandler; bail out if requested.
+        if (core::SignalHandler::shouldStop()) {
+            quit = true;
+            break;
+        }
+
+        const PLAYER::State st = player.state();
+        const bool playing = (st == PLAYER::State::Playing ||
+                              st == PLAYER::State::Paused);
+        const bool paused = (st == PLAYER::State::Paused);
+
+        oled.showTrack(static_cast<int>(cursor), static_cast<int>(tracks.size()),
+                       tracks.nameAt(cursor), playing, paused, scrollOffset,
+                       volume);
+
+        // Redraw the console frame (cursor home + per-line clear).
+        std::fputs("\033[H", stdout);
+        std::printf("=== Playback (output/) | Bluetooth: %s ===\033[K\n",
+                    deviceMac.empty() ? "(none)" : deviceMac.c_str());
+        std::printf("State: %s", paused ? "PAUSED" : (playing ? "PLAYING" : "STOPPED"));
+        if (volume >= 0) {
+            std::printf(" | Vol: %d%%", volume);
+        }
+        std::printf(" | Track %zu/%zu\033[K\n\n", cursor + 1, tracks.size());
+
+        const std::size_t start = (cursor >= 6) ? (cursor - 6) : 0;
+        const std::size_t end = (start + 12 < tracks.size()) ? (start + 12) : tracks.size();
+        for (std::size_t i = start; i < end; ++i) {
+            if (i == cursor) {
+                std::printf(" > %02zu. %s\033[K\n", i + 1, tracks.nameAt(i).c_str());
+            } else {
+                std::printf("   %02zu. %s\033[K\n", i + 1, tracks.nameAt(i).c_str());
+            }
+        }
+        std::printf("\n w/s: nav  space/p: play-pause  +/-: vol  q: quit\033[K\n");
+        std::fputs("\033[J", stdout);
+        std::fflush(stdout);
+
+        const int key = readPlayerKey(kPlayerKeyTimeoutMs);
+        ++scrollOffset;  // advances the OLED marquee
+
+        switch (key) {
+            case kKeyUp:
+            case kKeyLeft:
+            case 'w':
+            case 'a': {
+                const bool wasPlaying = playing;
+                if (wasPlaying) {
+                    player.stop();
+                }
+                cursor = (cursor + tracks.size() - 1) % tracks.size();
+                scrollOffset = 0;  // restart the marquee for the new track
+                if (wasPlaying) {
+                    player.play(tracks.pathAt(cursor));
+                }
+                break;
+            }
+            case kKeyDown:
+            case kKeyRight:
+            case 's':
+            case 'd': {
+                const bool wasPlaying = playing;
+                if (wasPlaying) {
+                    player.stop();
+                }
+                cursor = (cursor + 1) % tracks.size();
+                scrollOffset = 0;
+                if (wasPlaying) {
+                    player.play(tracks.pathAt(cursor));
+                }
+                break;
+            }
+            case '\r':
+            case ' ':
+            case 'p':
+                if (playing) {
+                    player.togglePause();
+                } else {
+                    player.play(tracks.pathAt(cursor));
+                }
+                break;
+            case '+':
+            case '=':
+                std::system("pactl set-sink-volume @DEFAULT_SINK@ +5% >/dev/null 2>&1");
+                volume = readPulseVolume();
+                break;
+            case '-':
+            case '_':
+                std::system("pactl set-sink-volume @DEFAULT_SINK@ -5% >/dev/null 2>&1");
+                volume = readPulseVolume();
+                break;
+            case 'q':
+            case 'Q':
+            case 0x03:  // Ctrl+C
+                quit = true;
+                break;
+            default:
+                break;
+        }
+    }
+
+    player.stop();
+    restoreRawTerm();
+    std::printf("\nBye.\n");
+    return 0;
+}
+
+// Playback mode: scan output/, connect the Bluetooth speaker (--bt-mac, the
+// persisted bt_mac, or the first paired device) and run the player screen.
+int runPlayerMode(const Config& config) {
+    Logger& log = Logger::instance();
+
+    TrackList tracks(TrackList::kDefaultDir);
+    if (!tracks.load()) {
+        return 1;
+    }
+    if (tracks.empty()) {
+        log.error("no WAV/MP3 files in '%s' - record something first "
+                  "(menu option 6 or --wav/--mp3)", tracks.directory().c_str());
+        return 1;
+    }
+
+    BluetoothTool bt;
+    std::string mac = config.btMac;
+    if (mac.empty()) {
+        mac = bt.discoverPairedDevice();
+        if (!mac.empty()) {
+            log.info("no --bt-mac given; using paired device %s", mac.c_str());
+        }
+    }
+
+    bool btReady = false;
+    if (!mac.empty()) {
+        btReady = bt.connect(mac);
+        if (!btReady) {
+            log.warning("Bluetooth connect failed; audio will go to the "
+                        "default (local) sink instead");
+        }
+    } else {
+        log.warning("no Bluetooth device configured (use --bt-mac or the "
+                    "config file); audio will go to the default sink");
+    }
+
+    Player player;
+    OledDisplay oled;
+    if (oled.init()) {
+        oled.showMessage("inmp441 player", btReady ? mac : "no BT / local sink");
+    }
+
+    // The OledDisplay destructor powers the screen down; the microphone
+    // owns the bcm2835 mapping, so nothing is closed here.
+    return runPlayerScreen(tracks, player, oled, btReady ? mac : std::string());
+}
+
 // Interactive menu shown after a console presentation. Lets the operator
-// configure the recording duration (min 5 s by default), channel, output
-// format and file, then record or run a bounded level test.
-int runMenuMode(audio::INMP441& mic, const Config& initial) {
+// configure the recording duration, channel, gain, output format and file,
+// then record or run a bounded level test. Every change is persisted to the
+// JSON config file automatically.
+int runMenuMode(Inmp441_t& mic, const Config& initial) {
     Logger& log = Logger::instance();
     Config config = initial;
-    config.mode = RunMode::kRecordWav;
+    config.mode = config.recordMp3 ? RunMode::kRecordMp3 : RunMode::kRecordWav;
 
     // The interactive menu has no file option: always record to a fresh
     // timestamped name (recording_YYYYMMDDHHMM.<ext>).
     if (config.outputFile.empty()) {
         config.outputFile = core::defaultOutputName("wav");
     }
+
+    // Persists the current settings; called after every menu change.
+    auto persistConfig = [&config, &log]() {
+        if (core::saveConfig(config, config.configFile)) {
+            log.info("configuration saved to %s", config.configFile.c_str());
+        } else {
+            log.error("failed to save configuration to %s", config.configFile.c_str());
+        }
+    };
 
     while (true) {
         std::printf("\n");
@@ -373,18 +678,21 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
         std::printf("  Channel : %s (L/R pin -> %s)\n",
                     config.selectLeftChannel ? "left" : "right",
                     config.selectLeftChannel ? "GND" : "+3V3");
+        std::printf("  Gain    : %+.1f dB\n", config.gainDb);
         std::printf("  Format  : %s\n",
                     config.mode == RunMode::kRecordMp3 ? "MP3 (lame)" : "WAV");
         std::printf("  File    : %s\n", config.outputFile.c_str());
+        std::printf("  Config  : %s\n", config.configFile.c_str());
         std::printf("------------------------------------------------------------\n");
-        std::printf("  1) Duration ....... %g s (min 5 s for test recordings)\n",
-                    config.durationSeconds);
+        std::printf("  1) Duration ....... %g s (min 1)\n", config.durationSeconds);
         std::printf("  2) Channel ........ %s\n",
                     config.selectLeftChannel ? "left" : "right");
-        std::printf("  3) Format ......... %s\n",
+        std::printf("  3) Gain ........... %+.1f dB\n", config.gainDb);
+        std::printf("  4) Format ......... %s\n",
                     config.mode == RunMode::kRecordMp3 ? "MP3" : "WAV");
-        std::printf("  4) Level test ..... live meter for %g s\n", kMenuMeterSeconds);
-        std::printf("  5) RECORD\n");
+        std::printf("  5) Level test ..... live meter for %g s\n", kMenuMeterSeconds);
+        std::printf("  6) RECORD\n");
+        std::printf("  7) Play output/ over Bluetooth\n");
         std::printf("  0/Q) Quit\n");
         std::printf("------------------------------------------------------------\n");
         std::printf("Choice> ");
@@ -412,6 +720,7 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
                     const double d = std::strtod(value.c_str(), &end);
                     if (end != value.c_str() && *end == '\0' && d >= 1.0) {
                         config.durationSeconds = d;
+                        persistConfig();
                     } else {
                         std::printf("  (ignored: must be a number >= 1)\n");
                     }
@@ -424,23 +733,48 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
                 log.info("channel set to %s (L/R pin -> %s)",
                          config.selectLeftChannel ? "left" : "right",
                          config.selectLeftChannel ? "GND" : "+3V3");
+                persistConfig();
                 break;
-            case '3':
+            case '3': {
+                std::printf("Gain in dB (e.g. 24 close talk, 40 room; +-%.0f max) [%+.1f]> ",
+                            core::kMaxGainDb, config.gainDb);
+                std::fflush(stdout);
+                std::string value;
+                std::getline(std::cin, value);
+                if (!value.empty()) {
+                    char* end = nullptr;
+                    const double d = std::strtod(value.c_str(), &end);
+                    if (end != value.c_str() && *end == '\0') {
+                        config.gainDb = core::clampGainDb(d);
+                        if (config.gainDb != d) {
+                            std::printf("  (clamped to %+.1f dB)\n", config.gainDb);
+                        }
+                        persistConfig();
+                    } else {
+                        std::printf("  (ignored: must be a number)\n");
+                    }
+                }
+                break;
+            }
+            case '4':
                 if (config.mode == RunMode::kRecordMp3) {
                     config.mode = RunMode::kRecordWav;
+                    config.recordMp3 = false;
                     config.outputFile = core::defaultOutputName("wav");
                 } else {
                     config.mode = RunMode::kRecordMp3;
+                    config.recordMp3 = true;
                     config.outputFile = core::defaultOutputName("mp3");
                 }
+                persistConfig();
                 break;
-            case '4': {
+            case '5': {
                 Config meterConfig = config;
                 meterConfig.meterSeconds = kMenuMeterSeconds;
                 runLevelMeter(mic, meterConfig);
                 break;
             }
-            case '5': {
+            case '6': {
                 // Show the live VU meter while recording from the menu.
                 config.showRecordMeter = true;
                 const int rc = (config.mode == RunMode::kRecordMp3)
@@ -454,12 +788,21 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
                 }
                 break;
             }
+            case '7':
+                runPlayerMode(config);
+                // Si el usuario salió de la pantalla de reproducción con
+                // Ctrl+C, salir también del menú (el flag queda activo).
+                if (core::SignalHandler::shouldStop()) {
+                    std::printf("Bye.\n");
+                    return 0;
+                }
+                break;
             case '0':
             case 'q':
                 std::printf("Bye.\n");
                 return 0;
             default:
-                std::printf("  (invalid choice; try 1-5, 0/Q)\n");
+                std::printf("  (invalid choice; try 1-7, 0/Q)\n");
                 break;
         }
     }
@@ -469,9 +812,29 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    Config config = core::parseArgs(argc, argv);
-
     Logger& log = Logger::instance();
+
+    // Cheap pre-scan: --help/--version must not touch the config file, and
+    // --config tells us where the persisted settings live.
+    bool wantsHelpOrVersion = false;
+    std::string configPath = "config.json";
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help" || arg == "--version") {
+            wantsHelpOrVersion = true;
+        } else if (arg == "--config" && i + 1 < argc && argv[i + 1] != nullptr) {
+            configPath = argv[i + 1];
+        }
+    }
+
+    // Persisted settings are loaded as base defaults; CLI options take
+    // precedence over them.
+    Config base;
+    if (!wantsHelpOrVersion) {
+        core::loadConfig(base, configPath);
+    }
+
+    Config config = core::parseArgs(argc, argv, base);
     log.setLevel(config.verbose ? LogLevel::kDebug : LogLevel::kInfo);
 
     if (!config.valid) {
@@ -489,35 +852,58 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // Persist the effective settings when requested (--save-config). The
+    // interactive menu also saves on every change.
+    if (config.saveConfigRequested) {
+        if (!core::saveConfig(config, config.configFile)) {
+            return 1;
+        }
+        log.info("configuration saved to %s", config.configFile.c_str());
+    }
+
     core::SignalHandler::install();
 
-    audio::INMP441 mic;
-    if (!mic.init(config.sampleRate, config.selectLeftChannel, config.driveLrSelectGpio)) {
-        return 1;
+    // RAII microphone handle: the constructor opens the I2S master and throws
+    // on failure; the destructor shuts the hardware down when `mic` leaves
+    // scope, so nothing needs to be closed explicitly at exit. The player
+    // mode does not need the microphone: it only reads output/ and plays it.
+    std::unique_ptr<Inmp441_t> mic;
+    if (config.mode != RunMode::kPlayer) {
+        try {
+            mic = std::make_unique<Inmp441_t>(config.sampleRate,
+                                              config.selectLeftChannel,
+                                              config.driveLrSelectGpio);
+        } catch (const std::runtime_error& e) {
+            log.error("cannot open microphone: %s", e.what());
+            return 1;
+        }
     }
 
     int result = 0;
     switch (config.mode) {
         case RunMode::kMenu:
-            result = runMenuMode(mic, config);
+            result = runMenuMode(*mic, config);
             break;
         case RunMode::kInfo:
             runInfoMode(config);
             break;
         case RunMode::kLevelMeter:
-            result = runLevelMeter(mic, config);
+            result = runLevelMeter(*mic, config);
             break;
         case RunMode::kRecordWav:
-            result = runRecordMode(mic, config);
+            result = runRecordMode(*mic, config);
             break;
         case RunMode::kRecordMp3:
-            result = runRecordMp3Mode(mic, config);
+            result = runRecordMp3Mode(*mic, config);
             break;
         case RunMode::kDumpRawWords:
-            result = runDumpMode(mic, config);
+            result = runDumpMode(*mic, config);
+            break;
+        case RunMode::kPlayer:
+            result = runPlayerMode(config);
             break;
     }
 
-    mic.close();
+    // `mic` (unique_ptr) destroys the Inmp441_t here, releasing the hardware.
     return result;
 }

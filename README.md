@@ -70,7 +70,7 @@ sudo ./bin/inmp441_rpi --wav mic.wav -d 10
 ## Remote build over SSH
 
 ```bash
-ssh joy@raspberry.local "cd /home/joy/src && git clone <REPO_URL> \
+ssh admin@localhost "cd /home/admin && git clone <REPO_URL> \
   && cd inmp441_rpi && git pull && make clean && make -j4 && make run"
 ```
 
@@ -87,6 +87,34 @@ ssh joy@raspberry.local "cd /home/joy/src && git clone <REPO_URL> \
 | [docs/build_and_install.md](docs/build_and_install.md) | Build/install/SSH workflow |
 | [docs/usage.md](docs/usage.md) | Command reference and examples |
 | [docs/testing.md](docs/testing.md) | Unit tests and hardware validation |
+
+## Commit conventions
+
+Commit messages follow **Conventional Commits** (see `docs/LEARNINGS.md`):
+
+```
+type(optional scope)!: description
+```
+
+| Type | Use |
+| --- | --- |
+| `feat:` | new feature |
+| `fix:` | bug fix |
+| `refactor:` | code change that neither fixes a bug nor adds a feature |
+| `docs:` | documentation only |
+| `test:` | tests only |
+| `chore:` | maintenance (build, tooling, dependencies) |
+| `build:` / `ci:` / `perf:` / `style:` | dedicated build/CI/performance/style changes |
+
+Every meaningful commit gets a version tag (`vX.Y.Z`); the `VERSION` file at
+the repo root always matches the latest tag without the `v` (e.g. tag `v1.7.1`
+→ `VERSION` = `1.7.1`). See `docs/LEARNINGS.md` for the full rules.
+
+A `commit-msg` git hook validates the format automatically — install it with:
+
+```bash
+bash scripts/install_commit_hook.sh
+```
 
 ## License
 

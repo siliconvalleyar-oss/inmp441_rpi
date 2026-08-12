@@ -49,7 +49,8 @@ private:
     static double oscillatorHz();
     bool configureI2sMaster(uint32_t divi, uint32_t divf);
 
-    bool initialized_ = false;
+    bool initialized_ = false;     // fully configured and running
+    bool hardwareOpen_ = false;     // bcm2835 mapped (partial-init cleanup)
     uint32_t sampleRateHz_ = 0;
 };
 

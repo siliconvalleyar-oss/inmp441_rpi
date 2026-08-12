@@ -5,7 +5,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fstream>
 #include <vector>
+
+#include <nlohmann/json.hpp>
+
+#include "core/Logger.hpp"
 
 namespace core {
 
@@ -64,8 +69,64 @@ std::string defaultOutputName(const char* extension) {
     return std::string("output/recording_") + stamp + "." + extension;
 }
 
-Config parseArgs(int argc, char* argv[]) {
-    Config config;
+bool loadConfig(Config& config, const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        core::Logger::instance().debug("no config file at '%s' (using defaults)",
+                                       path.c_str());
+        return false;
+    }
+
+    try {
+        nlohmann::json j;
+        file >> j;
+
+        config.sampleRate = j.value("sample_rate", config.sampleRate);
+        config.selectLeftChannel = j.value("left_channel", config.selectLeftChannel);
+        config.recordStereo = j.value("stereo", config.recordStereo);
+        config.durationSeconds = j.value("duration_seconds", config.durationSeconds);
+        config.warmupSeconds = j.value("warmup_seconds", config.warmupSeconds);
+        config.gainDb = j.value("gain_db", config.gainDb);
+        config.dropoutThresholdSeconds = j.value("dropout_seconds", config.dropoutThresholdSeconds);
+        config.meterIntervalMs = j.value("meter_interval_ms", config.meterIntervalMs);
+        config.recordMp3 = (j.value("format", std::string("wav")) == "mp3");
+        config.btMac = j.value("bt_mac", config.btMac);
+    } catch (const nlohmann::json::exception& e) {
+        core::Logger::instance().warning(
+            "config file '%s' is invalid, using defaults (%s)",
+            path.c_str(), e.what());
+        return false;
+    }
+
+    core::Logger::instance().info("loaded configuration from %s", path.c_str());
+    return true;
+}
+
+bool saveConfig(const Config& config, const std::string& path) {
+    nlohmann::json j;
+    j["sample_rate"] = config.sampleRate;
+    j["left_channel"] = config.selectLeftChannel;
+    j["stereo"] = config.recordStereo;
+    j["duration_seconds"] = config.durationSeconds;
+    j["warmup_seconds"] = config.warmupSeconds;
+    j["gain_db"] = config.gainDb;
+    j["dropout_seconds"] = config.dropoutThresholdSeconds;
+    j["meter_interval_ms"] = config.meterIntervalMs;
+    j["format"] = config.recordMp3 ? "mp3" : "wav";
+    j["bt_mac"] = config.btMac;
+
+    std::ofstream file(path);
+    if (!file.is_open()) {
+        core::Logger::instance().error("cannot write configuration to '%s'",
+                                       path.c_str());
+        return false;
+    }
+    file << j.dump(2) << "\n";
+    return true;
+}
+
+Config parseArgs(int argc, char* argv[], const Config& base) {
+    Config config = base;
 
     const std::vector<std::string> args(argv + 1, argv + argc);
     for (size_t i = 0; i < args.size(); ++i) {
@@ -87,6 +148,7 @@ Config parseArgs(int argc, char* argv[]) {
             config.mode = RunMode::kLevelMeter;
         } else if (arg == "--wav") {
             config.mode = RunMode::kRecordWav;
+            config.recordMp3 = false;
             if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-') {
                 config.outputFile = args[++i];
             } else {
@@ -94,6 +156,7 @@ Config parseArgs(int argc, char* argv[]) {
             }
         } else if (arg == "--mp3") {
             config.mode = RunMode::kRecordMp3;
+            config.recordMp3 = true;
             if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-') {
                 config.outputFile = args[++i];
             } else {
@@ -108,6 +171,15 @@ Config parseArgs(int argc, char* argv[]) {
                     ++i;
                 }
             }
+        } else if (arg == "--player") {
+            config.mode = RunMode::kPlayer;
+        } else if (arg == "--bt-mac") {
+            if (i + 1 >= args.size()) {
+                config.valid = false;
+                config.error = "--bt-mac requires a MAC address (XX:XX:XX:XX:XX:XX)";
+                return config;
+            }
+            config.btMac = args[++i];
         } else if (arg == "--info") {
             config.mode = RunMode::kInfo;
         } else if (arg == "--duration" || arg == "-d") {
@@ -137,6 +209,12 @@ Config parseArgs(int argc, char* argv[]) {
                 config.valid = false;
                 config.error = "--gain requires a numeric value (dB)";
                 return config;
+            }
+            if (config.gainDb < -kMaxGainDb || config.gainDb > kMaxGainDb) {
+                core::Logger::instance().warning(
+                    "--gain %.1f dB out of range, clamped to +-%.0f dB",
+                    config.gainDb, kMaxGainDb);
+                config.gainDb = clampGainDb(config.gainDb);
             }
             ++i;
         } else if (arg == "--warmup") {
@@ -168,6 +246,15 @@ Config parseArgs(int argc, char* argv[]) {
             config.showRecordMeter = true;
         } else if (arg == "--no-lr-gpio") {
             config.driveLrSelectGpio = false;
+        } else if (arg == "--config") {
+            if (i + 1 >= args.size()) {
+                config.valid = false;
+                config.error = "--config requires a file path";
+                return config;
+            }
+            config.configFile = args[++i];
+        } else if (arg == "--save-config") {
+            config.saveConfigRequested = true;
         } else if (arg == "--verbose" || arg == "-v") {
             config.verbose = true;
         } else {
@@ -208,7 +295,10 @@ void printUsage() {
         "\n"
         "Modes (default: interactive menu):\n"
         "  --menu                  Interactive menu after a console presentation\n"
-        "                          (duration/channel/format, record, level test)\n"
+        "                          (duration/channel/format, record, level test,\n"
+        "                           play output/ files over Bluetooth)\n"
+        "  --player                Play the WAV/MP3 files found in output/\n"
+        "                          (Bluetooth A2DP via bluetoothctl + PulseAudio)\n"
         "  --level                 Live RMS/peak meter\n"
         "  --wav [file.wav]        Record audio to a 16-bit PCM WAV file\n"
         "                          (default: output/recording_YYYYMMDDHHMM.wav)\n"
@@ -238,9 +328,23 @@ void printUsage() {
         "  --meter                 Show a live VU meter on stderr while recording\n"
         "  --no-lr-gpio            Do not drive GPIO21; the mic L/R pin is wired\n"
         "                          to GND (left) or +3V3 (right) permanently\n"
+        "      --config <file>     JSON config file to load/save (default\n"
+        "                          config.json in the project directory)\n"
+        "      --save-config       Persist the current settings to the config\n"
+        "                          file (also done automatically when changing\n"
+        "                          options in the interactive menu)\n"
+        "      --bt-mac <mac>      Bluetooth A2DP speaker MAC, e.g.\n"
+        "                          --bt-mac AA:BB:CC:DD:EE:FF. Saved as bt_mac\n"
+        "                          in the config file; if empty, the first\n"
+        "                          paired device is used automatically.\n"
         "  -v, --verbose           Verbose (debug) logging\n"
         "  --version               Show version and exit\n"
         "  -h, --help              Show this help\n"
+        "\n"
+        "Persisted settings:\n"
+        "  sample rate, channel, stereo, duration, warmup, gain, dropout\n"
+        "  threshold, meter interval, menu format (WAV/MP3) and Bluetooth\n"
+        "  MAC. CLI options always override the config file.\n"
         "\n"
         "Notes:\n"
         "  * Must run as root (the bcm2835 library needs /dev/mem access).\n"

@@ -239,6 +239,7 @@ bool I2SController::init(uint32_t sampleRateHz, bool selectLeftChannel,
         log.error("bcm2835_init() failed (is /dev/mem accessible?)");
         return false;
     }
+    hardwareOpen_ = true;  // from here on, shutdown() must clean up
 
     // Drive the INMP441 L/R select line (physical pin 40 = GPIO 21).
     if (driveLrSelectGpio) {
@@ -297,21 +298,27 @@ void I2SController::setLrSelect(bool selectLeftChannel, bool driveLrSelectGpio) 
 }
 
 void I2SController::shutdown() {
-    if (!initialized_) {
+    // Also runs on partial-init failure paths (clock/register setup failed):
+    // hardwareOpen_ is set right after bcm2835_init() succeeds, so the GPIOs
+    // are restored and the /dev/mem mapping released even when the peripheral
+    // never reached the running state.
+    if (!initialized_ && !hardwareOpen_) {
         return;
     }
 
-    // Stop reception and disable the module.
-    writeReg(kRegCs, 0);
+    if (initialized_) {
+        // Stop reception and disable the module.
+        writeReg(kRegCs, 0);
 
-    // Disable the PCM clock.
-    volatile uint32_t* ctl = cmReg(kRegCmPcmCtl);
-    bcm2835_peri_write(ctl, kCmPassword | kCmSrcOsc);
-    for (uint32_t i = 0; i < kBusyWaitMs; ++i) {
-        if ((bcm2835_peri_read(ctl) & kCmBusy) == 0) {
-            break;
+        // Disable the PCM clock.
+        volatile uint32_t* ctl = cmReg(kRegCmPcmCtl);
+        bcm2835_peri_write(ctl, kCmPassword | kCmSrcOsc);
+        for (uint32_t i = 0; i < kBusyWaitMs; ++i) {
+            if ((bcm2835_peri_read(ctl) & kCmBusy) == 0) {
+                break;
+            }
+            bcm2835_delay(1);
         }
-        bcm2835_delay(1);
     }
 
     // Restore GPIOs to a safe state.
@@ -322,6 +329,7 @@ void I2SController::shutdown() {
 
     bcm2835_close();
     initialized_ = false;
+    hardwareOpen_ = false;
 }
 
 size_t I2SController::readRaw(uint32_t* buffer, size_t maxWords) {

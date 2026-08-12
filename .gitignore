@@ -11,6 +11,9 @@ obj/
 *.mp3
 *.raw
 
+# Local configuration (JSON, saved by the app)
+config.json
+
 # Editor / IDE
 .vscode/
 .idea/

@@ -45,7 +45,7 @@ The project is designed for a clone-and-build flow over SSH. From your
 development machine:
 
 ```bash
-ssh joy@raspberry.local "cd /home/joy/src && \
+ssh admin@localhost "cd /home/admin && \
   git clone <REPO_URL> && cd inmp441_rpi && \
   git pull && make clean && make -j4 && make run"
 ```
