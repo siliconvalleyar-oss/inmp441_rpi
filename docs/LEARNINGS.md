@@ -182,7 +182,7 @@ security find-internet-password -s "github.com" -a "USUARIO"
 
 ```bash
 # Home del usuario
-echo $HOME          # /home/optimus o /Users/usuario
+echo $HOME          # /home/usuario o /Users/usuario
 
 # Config de git
 echo $GIT_CONFIG_GLOBAL  # ~/.gitconfig por defecto

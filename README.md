@@ -70,7 +70,7 @@ sudo ./bin/inmp441_rpi --wav mic.wav -d 10
 ## Remote build over SSH
 
 ```bash
-ssh joy@raspberry.local "cd /home/joy/src && git clone <REPO_URL> \
+ssh admin@localhost "cd /home/admin && git clone <REPO_URL> \
   && cd inmp441_rpi && git pull && make clean && make -j4 && make run"
 ```
 
