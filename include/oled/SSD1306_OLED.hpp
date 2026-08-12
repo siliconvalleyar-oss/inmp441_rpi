@@ -83,7 +83,7 @@
 class SSD1306 : public SSD1306_graphics  {
   public:
 	SSD1306(int16_t oledwidth, int16_t oledheight);
-	~SSD1306(){};
+	virtual ~SSD1306(){};
 
 	virtual void drawPixel(int16_t x, int16_t y, uint8_t color) override;
 	void OLEDupdate(void);
