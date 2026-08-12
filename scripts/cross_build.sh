@@ -163,20 +163,36 @@ CRTN="${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/crtn.o"
 CRTBEGIN="$("${CROSS_CXX}" -print-file-name=crtbegin.o)"
 CRTEND="$("${CROSS_CXX}" -print-file-name=crtend.o)"
 
-# --sysroot makes the libc.so linker script resolve its absolute paths
-# (/lib/arm-linux-gnueabihf/...) inside our sysroot. -rpath-link lets the
-# linker inspect the DT_NEEDED chain (libstdc++ -> libm/libgcc_s) at link time.
-SYSROOT_LDFLAGS="-Wl,--sysroot=${ARM_SYSROOT} \
+# -nostdlib/-nostartfiles: the toolchain's own -L dirs are searched BEFORE
+# user -L flags, so the driver's implicit -lc would resolve to the HOST libc
+# (glibc 2.39) and pull in GLIBC_PRIVATE mismatches with the Pi's libpthread.
+# Instead every runtime library is named explicitly from the sysroot using
+# exact file names (-l:), so nothing host-side leaks into the binary.
+#
+# -rpath-link lets the linker inspect the DT_NEEDED chain (libstdc++ ->
+# libm/libgcc_s) at link time. -dynamic-linker sets the ELF interpreter to the
+# Pi's loader path (bullseye ships /lib/ld-linux-armhf.so.3). libc is listed
+# so its GLIBC_PRIVATE symbols satisfy libpthread/libdl, and libc_nonshared.a
+# provides __libc_csu_* (normally pulled by the libc.so linker script, which
+# we bypass).
+SYSROOT_LDFLAGS="-nostdlib -no-pie -nostartfiles \
 -Wl,--no-as-needed \
+-Wl,-dynamic-linker=/lib/ld-linux-armhf.so.3 \
 -Wl,-rpath-link=${ARM_SYSROOT}/lib/arm-linux-gnueabihf \
 -Wl,-rpath-link=${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf \
+-L${ARM_SYSROOT}/lib \
 -L${ARM_SYSROOT}/lib/arm-linux-gnueabihf \
 -L${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf \
--no-pie -nostartfiles"
+-lbcm2835 -lmpg123 -lao \
+-l:libpthread.so.0 -l:libdl.so.2 -l:librt.so.1 -l:libm.so.6 \
+-l:libstdc++.so.6 -l:libgcc_s.so.1 \
+-l:libc.so.6 -l:ld-linux-armhf.so.3 \
+${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/libc_nonshared.a"
 
 # ---- 6. Build ---------------------------------------------------------------
 log "Cleaning previous build (may contain host/Pi objects)..."
 make clean >/dev/null 2>&1 || true
+mkdir -p obj
 
 # Use the Pi's glibc 2.31 headers (NOT the host's glibc 2.39 headers, which
 # redirect time()/stat()/strtol() to __time64/__isoc23_* symbols that do not
@@ -204,18 +220,21 @@ done < <("${CROSS_CXX}" -v -E -x c++ /dev/null 2>&1 \
     | grep -E '^ /' | sed 's|^ ||')
 SYSROOT_CPPFLAGS+=" -isystem ${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf -isystem ${ARM_SYSROOT}/usr/include"
 
-# -lpthread/-ldl/-lrt are merged into libc only since glibc 2.34; on
-# bullseye (2.31) they are separate shared libs and must be explicit. They are
-# listed BEFORE -lao so libpthread is added as a command-line DSO (binutils
-# --no-copy-dt-needed-entries: transitive deps of libao do not resolve object
-# symbols). -lc is explicit so libc (2.31) resolves the GLIBC_PRIVATE symbols
-# referenced by libdl/libpthread/libao before the driver appends its own -lc.
+# libstdc++ 11+ compat shim: the GCC 13 toolchain emits a call to
+# std::__throw_bad_array_new_length (GLIBCXX 3.4.29+) that the Pi's GCC 10
+# libstdc++ (6.0.28) does not export. Compile the shim against the toolchain's
+# own libstdc++ 13 headers and link it into the binary.
+log "Compiling libstdc++ compat shim (GCC 13 -> GCC 10 target)..."
+"${CROSS_CXX}" -std=c++17 -O2 ${SYSROOT_CPPFLAGS} \
+    -c scripts/cross/compat_shim.cpp -o obj/compat_shim.o
+
 log "Cross-compiling with ${CROSS_CXX} (sysroot: ${ARM_SYSROOT})..."
 make -j"$(nproc)" \
     CXX="${CROSS_CXX}" \
     CXXFLAGS_EXTRA="${SYSROOT_CPPFLAGS}" \
     BCM2835_INCLUDE="${ARM_SYSROOT}/include" \
-    BCM2835_LIB="${SYSROOT_LDFLAGS} -L${ARM_SYSROOT}/lib -lbcm2835 -lmpg123 -lpthread -ldl -lrt -lao -lc" \
+    BCM2835_LIB="${SYSROOT_LDFLAGS}" \
+    COMPAT_OBJS="obj/compat_shim.o" \
     CRT_BEGIN="${CRT1} ${CRTI} ${CRTBEGIN}" \
     CRT_END="${CRTEND} ${CRTN}"
 

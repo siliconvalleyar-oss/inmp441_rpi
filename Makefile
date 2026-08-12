@@ -43,6 +43,11 @@ LDFLAGS    := $(BCM2835_LIB) -lm -pthread
 CRT_BEGIN  ?=
 CRT_END    ?=
 
+# Extra objects for cross-builds (scripts/cross_build.sh): e.g. the compat
+# shim that provides libstdc++ 11+ symbols missing from the Pi's GCC 10
+# libstdc++ (std::__throw_bad_array_new_length).
+COMPAT_OBJS ?=
+
 # Discover sources and mirror the tree into obj/.
 SRCS := $(shell find $(SRC_DIR) -type f -name '*.cpp' | sort)
 OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SRCS))
@@ -60,7 +65,7 @@ all: $(TARGET)
 # ---- Binary ----------------------------------------------------------------
 
 $(TARGET): $(OBJS) | $(BIN_DIR)
-	$(CXX) $(CRT_BEGIN) $(OBJS) -o $@ $(LDFLAGS) $(CRT_END)
+	$(CXX) $(CRT_BEGIN) $(OBJS) $(COMPAT_OBJS) -o $@ $(LDFLAGS) $(CRT_END)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
