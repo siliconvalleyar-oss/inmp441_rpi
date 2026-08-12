@@ -1,16 +1,17 @@
 #include "audio/INMP441.hpp"
 
+#include <stdexcept>
+
 #include "core/Logger.hpp"
 
-namespace audio {
+namespace INMP441 {
 
-INMP441::~INMP441() {
-    close();
-}
-
-bool INMP441::init(uint32_t sampleRateHz, bool selectLeftChannel, bool driveLrSelectGpio) {
+Inmp441_t::Inmp441_t(uint32_t sampleRateHz, bool selectLeftChannel,
+                     bool driveLrSelectGpio) {
+    // The controller logs the precise failure reason (root check, /dev/mem,
+    // clock divider, ...) before returning false.
     if (!controller_.init(sampleRateHz, selectLeftChannel, driveLrSelectGpio)) {
-        return false;
+        throw std::runtime_error("INMP441 initialisation failed (see log above)");
     }
 
     sampleRateHz_ = sampleRateHz;
@@ -22,10 +23,9 @@ bool INMP441::init(uint32_t sampleRateHz, bool selectLeftChannel, bool driveLrSe
 
     core::Logger::instance().info("INMP441 ready: rate=%u Hz, 24-bit I2S",
                                   sampleRateHz_);
-    return true;
 }
 
-void INMP441::close() {
+Inmp441_t::~Inmp441_t() {
     if (!initialized_) {
         return;
     }
@@ -33,14 +33,14 @@ void INMP441::close() {
     initialized_ = false;
 }
 
-void INMP441::setChannel(bool selectLeftChannel, bool driveLrSelectGpio) {
+void Inmp441_t::setChannel(bool selectLeftChannel, bool driveLrSelectGpio) {
     if (!initialized_) {
         return;
     }
     controller_.setLrSelect(selectLeftChannel, driveLrSelectGpio);
 }
 
-size_t INMP441::readFrames(AudioFrame* frames, size_t frameCount) {
+size_t Inmp441_t::readFrames(audio::AudioFrame* frames, size_t frameCount) {
     if (!initialized_ || frameCount == 0) {
         return 0;
     }
@@ -55,15 +55,15 @@ size_t INMP441::readFrames(AudioFrame* frames, size_t frameCount) {
         if (controller_.readRaw(&right, 1) != 1) {
             break;
         }
-        frames[i].left24 = rawToSample24(left);
-        frames[i].right24 = rawToSample24(right);
+        frames[i].left24 = audio::rawToSample24(left);
+        frames[i].right24 = audio::rawToSample24(right);
         ++framesRead;
     }
     return framesRead;
 }
 
-size_t INMP441::readRawWords(uint32_t* words, size_t wordCount) {
+size_t Inmp441_t::readRawWords(uint32_t* words, size_t wordCount) {
     return controller_.readRaw(words, wordCount);
 }
 
-}  // namespace audio
+}  // namespace INMP441

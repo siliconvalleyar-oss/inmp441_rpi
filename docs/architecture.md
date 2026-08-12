@@ -43,9 +43,9 @@ inmp441_rpi/
               └───────┬────────┘   └──────┬──────┘   └─────┬───────┘
                       │                   │                │
                       └───────────────────▼────────────────┘
-                                 ┌───────────────┐
-                                 │  audio::INMP441  │  24-bit AudioFrame
-                                 └───────┬───────┘
+                                 ┌─────────────────┐
+                                 │INMP441::Inmp441_t│  RAII handle, 24-bit AudioFrame
+                                 └───────┬─────────┘
                                          │ raw 32-bit slots
                                  ┌───────▼───────┐
                                  │I2SController  │  PCM/I2S + CM clock,
@@ -69,9 +69,12 @@ inmp441_rpi/
    the I2S master frame (MODE/RXC/TXC) and the RX FIFO access (`CS`/`FIFO`).
    Exposes raw 32-bit slots. See [i2s_registers.md](i2s_registers.md).
 
-2. **INMP441** — the microphone domain. Knows that the mic delivers 24-bit
-   two's-complement data left-justified in 32-bit slots, one bit after the
-   frame-sync edge (standard I2S). It converts raw slots into
+2. **INMP441::Inmp441_t** — the microphone domain, and an RAII handle: the
+   constructor opens the I2S master and throws `std::runtime_error` on
+   failure; the destructor shuts the hardware down, so owning it via
+   `std::make_unique` releases everything at scope exit. Knows that the mic
+   delivers 24-bit two's-complement data left-justified in 32-bit slots, one
+   bit after the frame-sync edge (standard I2S). It converts raw slots into
    `AudioFrame { left24, right24 }` (see `SampleFormat.hpp`) and drives the
    L/R select line.
 
