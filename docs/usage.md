@@ -18,9 +18,10 @@ Options:
                              (default: output/recording_YYYYMMDDHHMM.mp3).
       --player               Play the WAV/MP3 files found in output/ over
                              Bluetooth A2DP (bluetoothctl + PulseAudio).
-      --bt-mac <MAC>         Bluetooth A2DP speaker MAC, e.g.
-                             --bt-mac AA:BB:CC:DD:EE:FF. If empty, the first
-                             paired device is used automatically.
+      --bt-mac <MAC>         Bluetooth A2DP speaker MAC, required for
+                             --player (e.g. --bt-mac AA:BB:CC:DD:EE:FF).
+                             No auto-detection: audio only plays through
+                             this device.
 
 When no file name is given, the default includes a local-time stamp down to
 the minute, e.g. `output/recording_202608121137.wav`, so each recording gets
@@ -100,9 +101,13 @@ Scans the `output/` directory for `*.wav` and `*.mp3` files, connects the
 Bluetooth speaker (A2DP) and shows a full-screen player:
 
 ```bash
-sudo ./bin/inmp441_rpi --player
 sudo ./bin/inmp441_rpi --player --bt-mac AA:BB:CC:DD:EE:FF
 ```
+
+The speaker must be configured with `--bt-mac` (or `bt_mac` in the config
+file). The app connects **only** to that device and plays **only** through
+it: if it is not connected (or PulseAudio has no sink for it), playback is
+aborted instead of falling back to the local speaker.
 
 Keys: `w`/`s` or arrows to change track, `space`/`p` play-pause, `+`/`-`
 volume, `q` to quit. The track name also scrolls on the OLED (if wired).

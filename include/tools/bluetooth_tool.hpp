@@ -46,10 +46,6 @@ public:
     BluetoothTool(const BluetoothTool&) = delete;
     BluetoothTool& operator=(const BluetoothTool&) = delete;
 
-    // Devuelve la MAC del primer dispositivo emparejado, o "" si no
-    // hay ninguno. Útil cuando el usuario no ha configurado --bt-mac.
-    std::string discoverPairedDevice() const;
-
     // Encender BT, emparejar/conectar y dejar el dispositivo como
     // salida por defecto. Devuelve true si quedó conectado.
     bool connect(const std::string& mac);
@@ -68,6 +64,18 @@ public:
 
     // Última MAC usada en connect().
     const std::string& lastDevice() const { return lastMac_; }
+
+    // PulseAudio es por-usuario y rechaza a root (Access denied): cuando la
+    // app corre con sudo (make run, necesario para /dev/mem al grabar), esta
+    // función detecta la sesión del usuario real (/run/user/*/pulse/native) y
+    // hace seteuid/setegid a ese usuario, de forma que pactl y libao vean el
+    // sink Bluetooth. Devuelve true si se dropearon privilegios (el llamador
+    // debe restaurarlos con restorePulseUser() antes de salir). No-op si ya
+    // corre como el usuario normal (devuelve false).
+    static bool dropToPulseUser();
+
+    // Restaura root (seteuid/setegid a 0) tras dropToPulseUser().
+    static void restorePulseUser();
 
 private:
     // Ejecuta un comando del sistema y devuelve su código de salida.

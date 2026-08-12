@@ -19,6 +19,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "core/Logger.hpp"
 
@@ -26,7 +29,77 @@ namespace BLUETOOTH {
 
 namespace {
 core::Logger& log() { return core::Logger::instance(); }
+
+// UID/GID del usuario al que se dropearon los privilegios (0 = sin dropear).
+uid_t g_droppedUid = 0;
+gid_t g_droppedGid = 0;
 }  // namespace
+
+bool BluetoothTool::dropToPulseUser() {
+    // Si ya corremos como el usuario normal, el entorno es correcto.
+    if (::geteuid() != 0) {
+        return false;
+    }
+
+    // Como root: buscar el primer servidor PulseAudio del sistema
+    // (/run/user/<uid>/pulse/native). PulseAudio comprueba el uid REAL del
+    // proceso (getuid()), así que seteuid() no basta: hay que poner el uid
+    // real y el effective al usuario (setresuid) dejando el saved uid en 0
+    // para poder volver a root con restorePulseUser().
+    DIR* dir = ::opendir("/run/user");
+    if (dir == nullptr) {
+        return false;
+    }
+
+    struct dirent* entry = nullptr;
+    while ((entry = ::readdir(dir)) != nullptr) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        const std::string runtime = std::string("/run/user/") + entry->d_name;
+        const std::string socket = runtime + "/pulse/native";
+        struct stat st {};
+        if (::stat(socket.c_str(), &st) == 0 && S_ISSOCK(st.st_mode)) {
+            const uid_t uid = static_cast<uid_t>(std::strtoul(entry->d_name, nullptr, 10));
+            if (uid == 0) {
+                continue;
+            }
+            g_droppedUid = uid;
+            g_droppedGid = st.st_gid;
+            ::setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
+            // Orden obligatorio: primero el grupo, luego el usuario.
+            // setresuid(uid, uid, 0): real y effective al usuario (PulseAudio
+            // los verifica), saved en 0 para poder restaurar root después.
+            if (::setresgid(g_droppedGid, g_droppedGid, 0) != 0 ||
+                ::setresuid(g_droppedUid, g_droppedUid, 0) != 0) {
+                g_droppedUid = 0;
+                g_droppedGid = 0;
+                ::closedir(dir);
+                return false;
+            }
+            log().info("Bluetooth: using PulseAudio session of user '%s'",
+                       entry->d_name);
+            ::closedir(dir);
+            return true;
+        }
+    }
+    ::closedir(dir);
+    return false;
+}
+
+void BluetoothTool::restorePulseUser() {
+    if (g_droppedUid == 0) {
+        return;
+    }
+    // El saved uid quedó en 0, así que root es restaurable: primero el
+    // effective (recupera capabilities) y luego real+saved completos.
+    ::seteuid(0);
+    ::setegid(0);
+    ::setresuid(0, 0, 0);
+    ::setresgid(0, 0, 0);
+    g_droppedUid = 0;
+    g_droppedGid = 0;
+}
 
 int BluetoothTool::run(const std::string& cmd) {
     return std::system(cmd.c_str());
@@ -42,23 +115,6 @@ std::string BluetoothTool::capture(const std::string& cmd) {
     }
     pclose(pipe);
     return out;
-}
-
-std::string BluetoothTool::discoverPairedDevice() const {
-    const std::string out = capture(
-        "timeout 5 bluetoothctl paired-devices 2>/dev/null | head -1 | awk '{print $2}'");
-    std::string mac = out;
-    // Recorta espacios / salto de línea.
-    const size_t first = mac.find_first_not_of(" \t\r\n");
-    const size_t last = mac.find_last_not_of(" \t\r\n");
-    if (first == std::string::npos) return std::string();
-    mac = mac.substr(first, last - first + 1);
-
-    // La MAC debe tener el formato xx:xx:xx:xx:xx:xx para ser útil.
-    if (mac.size() == 17 && mac.find(':') != std::string::npos) {
-        return mac;
-    }
-    return std::string();
 }
 
 void BluetoothTool::pair(const std::string& mac, const std::string& pin) {
@@ -115,19 +171,41 @@ bool BluetoothTool::connect(const BluetoothConfig& config) {
 
     setDefaultSink(config.mac);
 
-    if (isConnected(config.mac)) {
-        lastMac_ = config.mac;
-        log().info("Bluetooth: connected to %s (A2DP).", config.mac.c_str());
-        return true;
+    if (!isConnected(config.mac)) {
+        log().warning("Bluetooth: could not connect to %s. Make sure the "
+                      "speaker is powered on and in pairing mode.", config.mac.c_str());
+        log().warning("Bluetooth device state:\n%s",
+                      capture("timeout 5 bluetoothctl info " + config.mac + " 2>&1 | head -8").c_str());
+        log().warning("PulseAudio sinks:\n%s",
+                      capture("timeout 5 pactl list short sinks 2>&1 | head -10").c_str());
+        return false;
     }
 
-    log().warning("Bluetooth: could not connect to %s. Make sure the "
-                  "speaker is powered on and in pairing mode.", config.mac.c_str());
-    log().warning("Bluetooth device state:\n%s",
-                  capture("timeout 5 bluetoothctl info " + config.mac + " 2>&1 | head -8").c_str());
-    log().warning("PulseAudio sinks:\n%s",
-                  capture("timeout 5 pactl list short sinks 2>&1 | head -10").c_str());
-    return false;
+    // Política estricta: el audio solo sale por este dispositivo. Verifica
+    // que PulseAudio tenga el sink de ESTA MAC como por defecto; si no lo
+    // tiene, se aborta en vez de caer al altavoz local.
+    std::string macUnderscored = config.mac;
+    for (char& c : macUnderscored) {
+        if (c == ':') c = '_';
+    }
+    // pactl get-default-sink no existe en PulseAudio 14 (Bullseye): la
+    // forma portable de leer el sink por defecto es `pactl info`.
+    const std::string sinkOk = capture(
+        "pactl info 2>/dev/null | grep -i 'Default Sink' | grep -qi '" +
+        macUnderscored + "' && echo yes");
+    if (sinkOk.find("yes") == std::string::npos) {
+        log().warning("Bluetooth: PulseAudio has no default sink for %s; "
+                      "audio will NOT be routed. Reconnect the speaker and "
+                      "retry.", config.mac.c_str());
+        log().warning("PulseAudio sinks:\n%s",
+                      capture("timeout 5 pactl list short sinks 2>&1 | head -10").c_str());
+        return false;
+    }
+
+    lastMac_ = config.mac;
+    log().info("Bluetooth: connected to %s (A2DP) - audio via its sink.",
+               config.mac.c_str());
+    return true;
 }
 
 bool BluetoothTool::disconnect(const std::string& mac) {
@@ -149,16 +227,12 @@ void BluetoothTool::setDefaultSink(const std::string& mac) {
         if (c == ':') c = '_';
     }
 
-    // 1) Buscar un sink que contenga la MAC del dispositivo.
+    // Política estricta: solo se selecciona el sink de ESTA MAC (nunca un
+    // sink bluez genérico ni el altavoz local).
     std::string cmd =
         "SINK=$(pactl list short sinks 2>/dev/null | grep -i '" + macUnderscored +
         "' | head -1 | awk '{print $2}'); "
         "[ -n \"$SINK\" ] && pactl set-default-sink \"$SINK\" >/dev/null 2>&1";
-
-    // 2) Si no se encontró, usar cualquier sink bluez existente.
-    cmd += " || { "
-           "SINK=$(pactl list short sinks 2>/dev/null | grep -i bluez | head -1 | awk '{print $2}'); "
-           "[ -n \"$SINK\" ] && pactl set-default-sink \"$SINK\" >/dev/null 2>&1; }";
 
     // pactl es rápido y seguro (a diferencia de bluetoothctl, no se cuelga
     // sin TTY), así que no hace falta timeout aquí.

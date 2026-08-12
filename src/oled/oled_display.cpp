@@ -105,7 +105,7 @@ void OledDisplay::showTrack(int index, int total,
     oled_->setTextColor(WHITE);
 
     // Fila 0: estado + contador  "> 03/12 V:85"
-    char statusLine[24];
+    char statusLine[32];
     const char* icon = paused ? "||" : (playing ? ">" : " ");
     if (volumePercent >= 0) {
         std::snprintf(statusLine, sizeof(statusLine), "%s %02d/%02d V:%d%%",
@@ -122,9 +122,9 @@ void OledDisplay::showTrack(int index, int total,
     if (span > 1) {
         const int frames = scrollOffset - kMarqueeDelayFrames;
         if (frames >= 0) {
-            const int total = 2 * span;
-            int pos = (frames / kMarqueeStepFrames) % total;
-            if (pos >= span) pos = total - 1 - pos;
+            const int marqueeTotal = 2 * span;
+            int pos = (frames / kMarqueeStepFrames) % marqueeTotal;
+            if (pos >= span) pos = marqueeTotal - 1 - pos;
             line = line.substr(pos, kMaxNameChars);
         }
     }
