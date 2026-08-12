@@ -1,6 +1,7 @@
 #include "core/Config.hpp"
 
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -87,6 +88,7 @@ bool loadConfig(Config& config, const std::string& path) {
         config.durationSeconds = j.value("duration_seconds", config.durationSeconds);
         config.warmupSeconds = j.value("warmup_seconds", config.warmupSeconds);
         config.gainDb = j.value("gain_db", config.gainDb);
+        config.hpfHz = clampHpfHz(j.value("hpf_hz", config.hpfHz));
         config.dropoutThresholdSeconds = j.value("dropout_seconds", config.dropoutThresholdSeconds);
         config.meterIntervalMs = j.value("meter_interval_ms", config.meterIntervalMs);
         config.recordMp3 = (j.value("format", std::string("wav")) == "mp3");
@@ -110,6 +112,7 @@ bool saveConfig(const Config& config, const std::string& path) {
     j["duration_seconds"] = config.durationSeconds;
     j["warmup_seconds"] = config.warmupSeconds;
     j["gain_db"] = config.gainDb;
+    j["hpf_hz"] = config.hpfHz;
     j["dropout_seconds"] = config.dropoutThresholdSeconds;
     j["meter_interval_ms"] = config.meterIntervalMs;
     j["format"] = config.recordMp3 ? "mp3" : "wav";
@@ -217,6 +220,25 @@ Config parseArgs(int argc, char* argv[], const Config& base) {
                 config.gainDb = clampGainDb(config.gainDb);
             }
             ++i;
+        } else if (arg == "--hpf") {
+            if (i + 1 >= args.size() ||
+                !parseDouble(args[i + 1].c_str(), &config.hpfHz)) {
+                config.valid = false;
+                config.error = "--hpf requires a numeric value (Hz, 0 = off)";
+                return config;
+            }
+            if (!std::isfinite(config.hpfHz)) {
+                config.valid = false;
+                config.error = "--hpf requires a finite numeric value (Hz, 0 = off)";
+                return config;
+            }
+            if (config.hpfHz < 0.0 || config.hpfHz > kMaxHpfHz) {
+                core::Logger::instance().warning(
+                    "--hpf %.1f Hz out of range, clamped to 0..%.0f Hz",
+                    config.hpfHz, kMaxHpfHz);
+                config.hpfHz = clampHpfHz(config.hpfHz);
+            }
+            ++i;
         } else if (arg == "--warmup") {
             if (i + 1 >= args.size() || !parseDouble(args[i + 1].c_str(), &config.warmupSeconds)) {
                 config.valid = false;
@@ -317,6 +339,11 @@ void printUsage() {
         "                          The INMP441 is very quiet for speech: try +20\n"
         "                          to +30 dB for close talk, +40 dB for room\n"
         "                          ambience. Clips at full scale.\n"
+        "      --hpf <hz>          High-pass filter cutoff applied before the\n"
+        "                          digital gain (default 30 Hz; 0 disables).\n"
+        "                          Removes the mic DC offset and the sub-bass\n"
+        "                          hum of the power rail, which high gain\n"
+        "                          would amplify into clipping/saturation.\n"
         "      --dropout <sec>      Flag runs of digital silence longer than this\n"
         "                          (default 1 s) as mic dropouts in the recording\n"
         "                          summary (diagnosis of flaky wiring/capsule)\n"
@@ -343,9 +370,9 @@ void printUsage() {
         "  -h, --help              Show this help\n"
         "\n"
         "Persisted settings:\n"
-        "  sample rate, channel, stereo, duration, warmup, gain, dropout\n"
-        "  threshold, meter interval, menu format (WAV/MP3) and Bluetooth\n"
-        "  MAC. CLI options always override the config file.\n"
+        "  sample rate, channel, stereo, duration, warmup, gain, high-pass\n"
+        "  cutoff, dropout threshold, meter interval, menu format (WAV/MP3)\n"
+        "  and Bluetooth MAC. CLI options always override the config file.\n"
         "\n"
         "Notes:\n"
         "  * Must run as root (the bcm2835 library needs /dev/mem access).\n"

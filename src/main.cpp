@@ -198,24 +198,29 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
     const float gain =
         (config.gainDb == 0.0f) ? 1.0f : std::pow(10.0f, static_cast<float>(config.gainDb) / 20.0f);
 
-    // One-pole DC blocker (high-pass ~30 Hz). The INMP441 outputs a small DC
-    // offset; the digital gain would amplify that constant into a huge
-    // excursion that saturates (clips) the recording - the harsh "noise" heard
-    // at high gain settings. Removing the DC first lets the gain amplify only
-    // the acoustic waveform. Runs only when gain is applied.
-    const double dcR = 1.0 - 2.0 * M_PI * 30.0 / static_cast<double>(config.sampleRate);
-    double dcPrevX = 0.0;
-    double dcPrevY = 0.0;
+    // Adjustable one-pole high-pass filter (default 30 Hz, 0 = off). Removes
+    // the INMP441's DC offset and the sub-bass hum of the power rail BEFORE
+    // the digital gain: at high gain those constants would be amplified into
+    // a huge excursion that saturates (clips) the recording - the harsh
+    // "noise" heard at high gain settings. Unlike the old fixed DC blocker,
+    // the filter also runs when no gain is applied (hpf_hz > 0).
+    // Per-channel state: in stereo, L and R must not share one filter memory
+    // (that would cross-couple the two slots).
+    audio::HighPassFilter hpfLeft;
+    audio::HighPassFilter hpfRight;
+    hpfLeft.setCutoffHz(config.hpfHz, config.sampleRate);
+    hpfRight.setCutoffHz(config.hpfHz, config.sampleRate);
 
-    auto toInt16 = [gain, dcR, &dcPrevX, &dcPrevY](int16_t sample) -> int16_t {
+    // Applies the high-pass filter (when enabled) and then the digital gain.
+    auto applyFx = [gain](audio::HighPassFilter& hpf, int16_t sample) -> int16_t {
+        if (hpf.enabled()) {
+            sample = hpf.process(sample);
+        }
         if (gain == 1.0f) {
             return sample;
         }
-        const double x = static_cast<double>(sample) / 32768.0;
-        const double y = x - dcPrevX + dcR * dcPrevY;  // y = x - x[n-1] + R*y[n-1]
-        dcPrevX = x;
-        dcPrevY = y;
-        const double amplified = y * static_cast<double>(gain);
+        const double amplified = static_cast<double>(sample) / 32768.0 *
+                                 static_cast<double>(gain);
         long v = static_cast<long>(amplified * 32768.0);
         if (v > 32767L) {
             v = 32767L;
@@ -290,10 +295,10 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
             }
 
             if (config.recordStereo) {
-                interleaved[i * 2] = toInt16(frames[i].left16());
-                interleaved[i * 2 + 1] = toInt16(frames[i].right16());
+                interleaved[i * 2] = applyFx(hpfLeft, frames[i].left16());
+                interleaved[i * 2 + 1] = applyFx(hpfRight, frames[i].right16());
             } else {
-                interleaved[i] = toInt16(sample);
+                interleaved[i] = applyFx(hpfLeft, sample);
             }
         }
 
@@ -734,6 +739,7 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
                     config.selectLeftChannel ? "left" : "right",
                     config.selectLeftChannel ? "GND" : "+3V3");
         std::printf("  Gain    : %+.1f dB\n", config.gainDb);
+        std::printf("  HPF     : %g Hz high-pass (0 = off)\n", config.hpfHz);
         std::printf("  Format  : %s\n",
                     config.mode == RunMode::kRecordMp3 ? "MP3 (lame)" : "WAV");
         std::printf("  File    : %s\n", config.outputFile.c_str());
@@ -748,6 +754,7 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
         std::printf("  5) Level test ..... live meter for %g s\n", kMenuMeterSeconds);
         std::printf("  6) RECORD\n");
         std::printf("  7) Play output/ over Bluetooth\n");
+        std::printf("  8) HPF cutoff ...... %g Hz (0 = off)\n", config.hpfHz);
         std::printf("  0/Q) Quit\n");
         std::printf("------------------------------------------------------------\n");
         std::printf("Choice> ");
@@ -852,12 +859,34 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
                     return 0;
                 }
                 break;
+            case '8': {
+                std::printf("High-pass cutoff in Hz (0 = off, max %.0f) [%g]> ",
+                            core::kMaxHpfHz, config.hpfHz);
+                std::fflush(stdout);
+                std::string value;
+                std::getline(std::cin, value);
+                if (!value.empty()) {
+                    char* end = nullptr;
+                    const double d = std::strtod(value.c_str(), &end);
+                    if (end != value.c_str() && *end == '\0' && std::isfinite(d)) {
+                        config.hpfHz = core::clampHpfHz(d);
+                        if (config.hpfHz != d) {
+                            std::printf("  (clamped to %g Hz)\n", config.hpfHz);
+                        }
+                        log.info("high-pass cutoff set to %g Hz", config.hpfHz);
+                        persistConfig();
+                    } else {
+                        std::printf("  (ignored: must be a number)\n");
+                    }
+                }
+                break;
+            }
             case '0':
             case 'q':
                 std::printf("Bye.\n");
                 return 0;
             default:
-                std::printf("  (invalid choice; try 1-7, 0/Q)\n");
+                std::printf("  (invalid choice; try 1-8, 0/Q)\n");
                 break;
         }
     }
