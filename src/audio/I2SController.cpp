@@ -3,6 +3,7 @@
 #include <bcm2835.h>
 
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <sys/types.h>
 #include <unistd.h>
@@ -105,8 +106,11 @@ constexpr uint32_t kFrameSyncBits = 32;
 constexpr uint32_t kDataDelayBits = 1;
 // 32-bit slot width, encoded as (width - 8) per the kernel convention.
 constexpr uint32_t kWordWidthCode = 32 - 8;
-// Master clock input 19.2 MHz, BCLK = rate * 64.
-constexpr double kOscillatorHz = 19200000.0;
+// Master clock input (crystal oscillator) used for the PCM clock divider.
+// BCM2835/6/7 (Pi 1..Zero 2W, 3) use a 19.2 MHz crystal; BCM2711 (Pi 4 /
+// CM4 / Pi 400) and BCM2712 (Pi 5) use a 54 MHz crystal.
+constexpr double kOscillatorHzLegacy = 19200000.0;
+constexpr double kOscillatorHzModern = 54000000.0;
 constexpr uint32_t kBitsPerFrame = 64;
 
 constexpr uint32_t kBusyWaitMs = 100;
@@ -135,10 +139,26 @@ I2SController::~I2SController() {
     shutdown();
 }
 
+double I2SController::oscillatorHz() {
+    // Read the board model from the device tree; the clock manager crystal
+    // differs between the old (19.2 MHz) and new (54 MHz) Raspberry Pis.
+    FILE* modelFile = std::fopen("/proc/device-tree/model", "r");
+    if (modelFile != nullptr) {
+        char model[128] = {0};
+        const size_t n = std::fread(model, 1, sizeof(model) - 1, modelFile);
+        std::fclose(modelFile);
+        model[n] = '\0';
+        if (std::strstr(model, "4") != nullptr || std::strstr(model, "5") != nullptr) {
+            return kOscillatorHzModern;
+        }
+    }
+    return kOscillatorHzLegacy;
+}
+
 bool I2SController::configureClock(uint32_t sampleRateHz, uint32_t* diviOut,
                                    uint32_t* divfOut) {
-    // BCLK = sample_rate * 64; divider = 19.2 MHz / BCLK.
-    const double divisor = kOscillatorHz / (static_cast<double>(sampleRateHz) * kBitsPerFrame);
+    // BCLK = sample_rate * 64; divider = oscillator / BCLK.
+    const double divisor = oscillatorHz() / (static_cast<double>(sampleRateHz) * kBitsPerFrame);
     const uint32_t divi = static_cast<uint32_t>(divisor);
     double frac = divisor - static_cast<double>(divi);
     uint32_t divf = static_cast<uint32_t>(frac * 4096.0 + 0.5);
@@ -252,10 +272,10 @@ bool I2SController::init(uint32_t sampleRateHz, bool selectLeftChannel,
     sampleRateHz_ = sampleRateHz;
     initialized_ = true;
 
-    log.info("I2S master ready: rate=%u Hz, BCLK=%.3f MHz, div=%u.%04u (xosc 19.2 MHz)",
+    log.info("I2S master ready: rate=%u Hz, BCLK=%.3f MHz, div=%u.%04u (xosc %.1f MHz)",
              sampleRateHz_,
              static_cast<double>(sampleRateHz_) * kBitsPerFrame / 1000000.0,
-             divi, (divf * 10000) / 4096);
+             divi, (divf * 10000) / 4096, oscillatorHz() / 1000000.0);
     return true;
 }
 

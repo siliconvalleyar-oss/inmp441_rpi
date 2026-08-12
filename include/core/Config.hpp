@@ -15,7 +15,7 @@ enum class RunMode {
 
 struct Config {
     RunMode mode = RunMode::kLevelMeter;
-    std::string outputFile = "capture.wav";
+    std::string outputFile = "output/recording.wav";
     double durationSeconds = 5.0;
     uint32_t sampleRate = 48000;
     bool selectLeftChannel = true;   // L/R select: true = left, false = right

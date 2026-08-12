@@ -75,7 +75,7 @@ Config parseArgs(int argc, char* argv[]) {
             config.mode = RunMode::kLevelMeter;
         } else if (arg == "--wav") {
             config.mode = RunMode::kRecordWav;
-            if (i + 1 < args.size()) {
+            if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-') {
                 config.outputFile = args[++i];
             }
         } else if (arg == "--dump") {
@@ -158,6 +158,7 @@ void printUsage() {
         "Modes (default: level meter):\n"
         "  --level                 Live RMS/peak meter (default)\n"
         "  --wav [file.wav]        Record audio to a 16-bit PCM WAV file\n"
+        "                          (default: output/recording.wav)\n"
         "  --dump [count]          Dump N raw 32-bit I2S words and exit (debug)\n"
         "  --info                  Print hardware/configuration info and exit\n"
         "\n"

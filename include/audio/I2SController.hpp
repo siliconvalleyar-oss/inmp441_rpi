@@ -42,6 +42,7 @@ private:
     static void writeReg(uint32_t offset, uint32_t value);
 
     static bool configureClock(uint32_t sampleRateHz, uint32_t* diviOut, uint32_t* divfOut);
+    static double oscillatorHz();
     bool configureI2sMaster(uint32_t divi, uint32_t divf);
 
     bool initialized_ = false;

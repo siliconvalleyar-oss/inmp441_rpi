@@ -1,5 +1,7 @@
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <sys/stat.h>
 #include <vector>
 
 #include "audio/AudioProcessor.hpp"
@@ -17,6 +19,32 @@ using core::RunMode;
 
 // Frames fetched per I2S read burst (~5 ms at 48 kHz).
 constexpr size_t kChunkFrames = 240;
+
+// Creates the parent directory (or directories) of an output path.
+bool ensureParentDirectory(const std::string& outputPath) {
+    const size_t pos = outputPath.find_last_of('/');
+    if (pos == std::string::npos || pos == 0) {
+        return true;
+    }
+    const std::string dir = outputPath.substr(0, pos);
+    std::string current;
+    size_t start = 0;
+    while (true) {
+        const size_t slash = dir.find('/', start);
+        if (slash == std::string::npos) {
+            break;
+        }
+        current = dir.substr(0, slash);
+        if (::mkdir(current.c_str(), 0777) != 0 && errno != EEXIST) {
+            return false;
+        }
+        start = slash + 1;
+    }
+    if (::mkdir(dir.c_str(), 0777) != 0 && errno != EEXIST) {
+        return false;
+    }
+    return true;
+}
 
 void runInfoMode(const Config& config) {
     std::printf("inmp441_rpi -- hardware / configuration\n");
@@ -63,6 +91,11 @@ int runLevelMeter(audio::INMP441& mic, const Config& config) {
 
 int runRecordMode(audio::INMP441& mic, const Config& config) {
     Logger& log = Logger::instance();
+
+    if (!ensureParentDirectory(config.outputFile)) {
+        log.error("cannot create output directory for '%s'", config.outputFile.c_str());
+        return 1;
+    }
 
     audio::WaveWriter writer(config.outputFile, config.sampleRate,
                              config.recordStereo);
@@ -162,7 +195,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (config.showVersion) {
-        std::printf("inmp441_rpi 1.0.0\n");
+        std::printf("inmp441_rpi 1.1.0\n");
         return 0;
     }
 
