@@ -43,8 +43,7 @@
 #         && scp /tmp/arm_runtime.tgz pi@<pi-ip>:/tmp/'  # (scp pi@<pi-ip>:/tmp/arm_runtime.tgz .)
 #   scp pi@<pi-ip>:/tmp/arm_runtime.tgz /tmp/
 #   tar xzf /tmp/arm_runtime.tgz -C "${ARM_SYSROOT}"
-#   ln -sf arm-linux-gnueabihf/ld-linux-armhf.so.3 "${ARM_SYSROOT}"/lib/ld-linux-armhf.so.3
-#   ln -sf libstdc++.so.6.0.28 "${ARM_SYSROOT}"/usr/lib/arm-linux-gnueabihf/libstdc++.so
+#   (the script fixes up the dev symlinks automatically, so no manual ln needed)
 #
 #   Also populate the glibc 2.31 headers (same idea):
 #     ssh pi@<pi-ip> 'cd / && tar czf /tmp/arm_headers.tgz --exclude=usr/include/c++ \
@@ -98,9 +97,13 @@ if ! echo '#include <mpg123.h>' | "${CROSS_CXX}" -isystem "${ARM_SYSROOT}/usr/in
 fi
 
 # ---- 3. Pi runtime libraries + headers (glibc 2.31 / libstdc++ GCC 10) ------
+# The exact libstdc++ version depends on the Pi the sysroot was populated from
+# (bullseye ships 6.0.28, bookworm 6.0.30...). Derive it with a glob instead
+# of hardcoding it.
+LIBSTDCXX_SO="$(ls "${ARM_SYSROOT}"/usr/lib/arm-linux-gnueabihf/libstdc++.so.6.0.* 2>/dev/null | head -1 || true)"
 if [[ ! -f "${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/crt1.o" ||
       ! -f "${ARM_SYSROOT}/lib/arm-linux-gnueabihf/libc.so.6" ||
-      ! -f "${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/libstdc++.so.6.0.28" ||
+      -z "${LIBSTDCXX_SO}" ||
       ! -f "${ARM_SYSROOT}/usr/include/features.h" ]]; then
     die "Pi runtime libraries missing in ${ARM_SYSROOT}. Populate them once from a 32-bit Pi\n" \
         "  (ssh pi@<pi-ip> 'cd / && tar czf /tmp/arm_runtime.tgz lib/arm-linux-gnueabihf/ld-linux-armhf.so.3 lib/arm-linux-gnueabihf/libc.so.6 lib/arm-linux-gnueabihf/libc-*.so lib/arm-linux-gnueabihf/libm.so.6 lib/arm-linux-gnueabihf/libm-*.so lib/arm-linux-gnueabihf/libpthread.so.0 lib/arm-linux-gnueabihf/libpthread-*.so lib/arm-linux-gnueabihf/libdl.so.2 lib/arm-linux-gnueabihf/libdl-*.so lib/arm-linux-gnueabihf/librt.so.1 lib/arm-linux-gnueabihf/librt-*.so lib/arm-linux-gnueabihf/libgcc_s.so.1 usr/lib/arm-linux-gnueabihf/libstdc++.so.6 usr/lib/arm-linux-gnueabihf/libstdc++.so.6.0.* usr/lib/arm-linux-gnueabihf/libc.so usr/lib/arm-linux-gnueabihf/libm.so usr/lib/arm-linux-gnueabihf/libpthread.so usr/lib/arm-linux-gnueabihf/libdl.so usr/lib/arm-linux-gnueabihf/librt.so usr/lib/arm-linux-gnueabihf/libc_nonshared.a usr/lib/arm-linux-gnueabihf/crt1.o usr/lib/arm-linux-gnueabihf/Scrt1.o usr/lib/arm-linux-gnueabihf/crti.o usr/lib/arm-linux-gnueabihf/crtn.o && scp /tmp/arm_runtime.tgz <pc>:/tmp/'), then:\n" \
@@ -124,7 +127,7 @@ ln -sfn "../../lib/arm-linux-gnueabihf/libpthread.so.0" "${DEVRLIB}/libpthread.s
 ln -sfn "../../lib/arm-linux-gnueabihf/libdl.so.2"     "${DEVRLIB}/libdl.so"
 ln -sfn "../../lib/arm-linux-gnueabihf/librt.so.1"     "${DEVRLIB}/librt.so"
 ln -sfn "../../lib/arm-linux-gnueabihf/libgcc_s.so.1"  "${DEVRLIB}/libgcc_s.so"
-ln -sfn "libstdc++.so.6.0.28"                          "${DEVRLIB}/libstdc++.so"
+ln -sfn "$(basename "${LIBSTDCXX_SO}")"                "${DEVRLIB}/libstdc++.so"
 ln -sfn "arm-linux-gnueabihf/ld-linux-armhf.so.3"      "${ARM_SYSROOT}/lib/ld-linux-armhf.so.3"
 
 # ---- 4. bcm2835 into the local sysroot (no root needed) ---------------------
@@ -174,7 +177,9 @@ CRTEND="$("${CROSS_CXX}" -print-file-name=crtend.o)"
 # Pi's loader path (bullseye ships /lib/ld-linux-armhf.so.3). libc is listed
 # so its GLIBC_PRIVATE symbols satisfy libpthread/libdl, and libc_nonshared.a
 # provides __libc_csu_* (normally pulled by the libc.so linker script, which
-# we bypass).
+# we bypass). -l:ld-linux-armhf.so.3 additionally records the loader as a
+# DT_NEEDED, matching what glibc-linked binaries normally carry (empirically
+# needed for the GLIBC_PRIVATE chain to resolve - keep it).
 SYSROOT_LDFLAGS="-nostdlib -no-pie -nostartfiles \
 -Wl,--no-as-needed \
 -Wl,-dynamic-linker=/lib/ld-linux-armhf.so.3 \
@@ -239,9 +244,25 @@ make -j"$(nproc)" \
     CRT_END="${CRTEND} ${CRTN}"
 
 # ---- 7. Verify --------------------------------------------------------------
-log "Verifying (GLIBC requirement must be <= 2.31 to run on bullseye)..."
+log "Verifying (GLIBC/GLIBCXX must be <= bullseye: GLIBC_2.31 / GLIBCXX_3.4.28)..."
 file bin/inmp441_rpi
+
 GLIBC_NEEDED="$("${CROSS_OBJDUMP}" -T bin/inmp441_rpi 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1 || true)"
-log "max GLIBC version required: ${GLIBC_NEEDED:-unknown}"
+GLIBCXX_NEEDED="$("${CROSS_OBJDUMP}" -T bin/inmp441_rpi 2>/dev/null | grep -oE 'GLIBCXX_[0-9.]+' | sort -Vu | tail -1 || true)"
+log "max GLIBC  version required: ${GLIBC_NEEDED:-unknown}"
+log "max GLIBCXX version required: ${GLIBCXX_NEEDED:-unknown}"
+
+if ! file bin/inmp441_rpi | grep -q 'ELF 32-bit'; then
+    die "bin/inmp441_rpi is not a 32-bit ARM executable - link failed."
+fi
+if [[ -n "${GLIBC_NEEDED}" ]] &&
+   [[ "$(printf '%s\n%s\n' "${GLIBC_NEEDED}" 'GLIBC_2.31' | sort -V | tail -1)" != 'GLIBC_2.31' ]]; then
+    die "binary requires ${GLIBC_NEEDED}, but bullseye has GLIBC_2.31 - sysroot mismatch."
+fi
+if [[ -n "${GLIBCXX_NEEDED}" ]] &&
+   [[ "$(printf '%s\n%s\n' "${GLIBCXX_NEEDED}" 'GLIBCXX_3.4.28' | sort -V | tail -1)" != 'GLIBCXX_3.4.28' ]]; then
+    die "binary requires ${GLIBCXX_NEEDED}, but bullseye ships libstdc++ with GLIBCXX_3.4.28 - sysroot mismatch."
+fi
+
 log "Done. Copy to the Pi and run, e.g.:"
 log "  scp bin/inmp441_rpi pi@<pi-ip>:/tmp/ && ssh pi@<pi-ip> 'sudo /tmp/inmp441_rpi --version'"
