@@ -15,17 +15,34 @@ sudo bash scripts/install_dependencies.sh
 
 This installs:
 
-- `build-essential` (g++, make), `git`, `wget`
+- `build-essential` (g++, make), `git`, `wget`, `curl`
+- `nlohmann-json3-dev` — `config.json` persistence
+- `libmpg123-dev`, `libao-dev` — MP3 playback (`--player`)
+- `lame` — MP3 encoding (`--mp3` mode)
+- `bluez`, `pulseaudio`, `pulseaudio-module-bluetooth`, `pulseaudio-utils`
+  — Bluetooth A2DP playback (`bluetoothctl` + `pactl`)
 - the **bcm2835** userspace library v1.71 (`/usr/local/include/bcm2835.h`,
   `/usr/local/lib/libbcm2835.a`)
 
 The script detects the architecture automatically and works identically on
-32-bit and 64-bit images.
+32-bit and 64-bit images. On an **x86_64 PC** it additionally installs the ARM
+cross toolchain (`g++-arm-linux-gnueabihf`) plus the armhf multiarch audio
+libraries, so you can build with `scripts/cross_build.sh` without the Pi
+connected.
 
 ## 2. Build
 
+On the Pi:
+
 ```bash
 make clean && make -j4
+```
+
+On an x86_64 PC (produces an armhf binary that runs on the Pi, needs the
+sysroot populated once from a 32-bit Pi — see the script header):
+
+```bash
+bash scripts/cross_build.sh
 ```
 
 Object files land in `obj/` (mirroring the `src/` tree) and the binary is

@@ -27,12 +27,21 @@ BCM2835_INCLUDE ?= /usr/local/include
 
 WARNINGS   := -Wall -Wextra -Wpedantic -Wshadow
 OPT_FLAGS  := -O2
+# Extra flags for cross-builds (scripts/cross_build.sh): e.g. -isystem for
+# the target's glibc headers so the binary matches the Pi's runtime.
+CXXFLAGS_EXTRA ?=
 CXXFLAGS   := $(OPT_FLAGS) -std=$(CXXSTD) $(WARNINGS) -I$(INC_DIR) \
               -I$(INC_DIR)/oled -I$(INC_DIR)/sound -I$(INC_DIR)/tools \
-              -I$(BCM2835_INCLUDE) -MMD -MP
+              -I$(BCM2835_INCLUDE) $(CXXFLAGS_EXTRA) -MMD -MP
 LDLIBS     := -lbcm2835 -lmpg123 -lao
 BCM2835_LIB ?= $(LDLIBS)
 LDFLAGS    := $(BCM2835_LIB) -lm -pthread
+
+# Cross-build startup objects (scripts/cross_build.sh). Empty on native
+# builds; for cross builds they provide the target's crt1.o/crti.o/crtn.o
+# (glibc-version-matched) so the binary runs on older systems.
+CRT_BEGIN  ?=
+CRT_END    ?=
 
 # Discover sources and mirror the tree into obj/.
 SRCS := $(shell find $(SRC_DIR) -type f -name '*.cpp' | sort)
@@ -51,7 +60,7 @@ all: $(TARGET)
 # ---- Binary ----------------------------------------------------------------
 
 $(TARGET): $(OBJS) | $(BIN_DIR)
-	$(CXX) $(OBJS) -o $@ $(LDFLAGS)
+	$(CXX) $(CRT_BEGIN) $(OBJS) -o $@ $(LDFLAGS) $(CRT_END)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)

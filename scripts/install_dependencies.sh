@@ -2,12 +2,22 @@
 #
 # install_dependencies.sh
 # -----------------------
-# Installs every dependency needed to build inmp441_rpi on Raspberry Pi OS.
+# Installs every dependency needed to build and run inmp441_rpi.
 #
-# Works on both 32-bit (armhf) and 64-bit (arm64) systems:
-#   * build essentials (compiler, make)
-#   * git, wget
+# Works on both 32-bit (armhf) and 64-bit (arm64) Raspberry Pi OS, and on an
+# x86_64 PC it also prepares the ARM cross-compilation toolchain (so you can
+# run scripts/cross_build.sh without the Pi connected).
+#
+# Installs:
+#   * build essentials (compiler, make) and git/wget/curl
+#   * nlohmann-json3-dev  (config.json persistence)
+#   * libmpg123-dev, libao-dev  (MP3 playback, --player)
+#   * lame               (MP3 encoding, --mp3 mode)
+#   * bluez, pulseaudio, pulseaudio-module-bluetooth, pulseaudio-utils
+#                        (Bluetooth A2DP playback: bluetoothctl + pactl)
 #   * the bcm2835 userspace library (1.71) installed under /usr/local
+#   * [x86_64 host only] g++-arm-linux-gnueabihf + armhf multiarch libs for
+#                        scripts/cross_build.sh
 #
 # Usage:  bash scripts/install_dependencies.sh
 # Requires: root (or a user with sudo).
@@ -88,11 +98,32 @@ log "Installing lame (MP3 encoder for --mp3 mode)..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y lame
 
 log "Installing runtime tools (Bluetooth A2DP + PulseAudio for --player)..."
-# Nota: bluetoothctl lo provee el paquete bluez, no es un paquete aparte.
+# bluetoothctl lo provee bluez; pactl lo provee pulseaudio-utils (necesario
+# para volver a conectar el sink por defecto tras un pairing).
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
     bluez \
     pulseaudio \
-    pulseaudio-module-bluetooth
+    pulseaudio-module-bluetooth \
+    pulseaudio-utils
+
+# ---------------------------------------------------------------------------
+# x86_64 host: ARM cross toolchain + multiarch (for scripts/cross_build.sh)
+# ---------------------------------------------------------------------------
+# Sólo tiene sentido en un PC de desarrollo, no en la Pi.
+case "$ARCH" in
+    host*)
+        log "Host PC detected - installing ARM cross toolchain (for scripts/cross_build.sh)..."
+        if [[ "$(dpkg --print-foreign-architectures)" != *armhf* ]]; then
+            log "Enabling armhf multiarch..."
+            dpkg --add-architecture armhf
+            apt-get update -y
+        fi
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            g++-arm-linux-gnueabihf \
+            libmpg123-dev:armhf \
+            libao-dev:armhf
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # bcm2835 library
@@ -137,5 +168,24 @@ test -f /usr/local/lib/libbcm2835.a || die "libbcm2835.a not found in /usr/local
 g++ --version >/dev/null 2>&1 || die "g++ not available"
 make --version >/dev/null 2>&1 || die "make not available"
 
+echo '#include <nlohmann/json.hpp>' | g++ -E -x c++ - >/dev/null 2>&1 \
+    || die "nlohmann/json.hpp not found (nlohmann-json3-dev)"
+echo '#include <mpg123.h>' | g++ -E -x c++ - >/dev/null 2>&1 \
+    || die "mpg123.h not found (libmpg123-dev)"
+echo '#include <ao/ao.h>' | g++ -E -x c++ - >/dev/null 2>&1 \
+    || die "ao/ao.h not found (libao-dev)"
+
+command -v lame >/dev/null 2>&1 || warn "lame not found - --mp3 mode will fail"
+command -v bluetoothctl >/dev/null 2>&1 || warn "bluetoothctl not found - --player/Bluetooth will fail"
+command -v pactl >/dev/null 2>&1 || warn "pactl not found - volume control/Bluetooth routing will fail"
+
+case "$ARCH" in
+    host*)
+        command -v arm-linux-gnueabihf-g++ >/dev/null 2>&1 \
+            || die "arm-linux-gnueabihf-g++ not found (cross toolchain)"
+        ;;
+esac
+
 log "All dependencies installed successfully (${ARCH})."
 log "Next step:  make clean && make -j4"
+log "On an x86_64 host, use instead:  bash scripts/cross_build.sh"
