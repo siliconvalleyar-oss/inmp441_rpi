@@ -27,7 +27,7 @@ using core::RunMode;
 constexpr size_t kChunkFrames = 240;
 
 // Application version reported by --version and the menu banner.
-constexpr const char* kAppVersion = "1.4.0";
+constexpr const char* kAppVersion = "1.5.0";
 
 // Level test duration used by the interactive menu.
 constexpr double kMenuMeterSeconds = 5.0;
