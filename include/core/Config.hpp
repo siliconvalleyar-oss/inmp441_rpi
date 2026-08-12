@@ -17,7 +17,9 @@ enum class RunMode {
 
 struct Config {
     RunMode mode = RunMode::kMenu;
-    std::string outputFile = "output/recording.wav";
+    // Output file. Empty until set by parseArgs; when left empty in a record
+    // mode the code picks a timestamped default (recording_YYYYMMDDHHMM.<ext>).
+    std::string outputFile;
     double durationSeconds = 5.0;
     uint32_t sampleRate = 48000;
     bool selectLeftChannel = true;   // L/R select: true = left, false = right
@@ -36,6 +38,16 @@ struct Config {
     bool valid = true;
     std::string error;
 };
+
+// Builds the default output file name with a local-time stamp down to the
+// minute, e.g. "output/recording_202608121137.wav". Used when no explicit
+// file name is given on the command line (--wav/--mp3 without a file).
+std::string defaultOutputName(const char* extension);
+
+// True when `mode` records audio to a file (WAV or MP3).
+constexpr bool isRecordMode(RunMode mode) {
+    return mode == RunMode::kRecordWav || mode == RunMode::kRecordMp3;
+}
 
 // Parses the command line. On failure `valid` is set to false and `error`
 // contains a human-readable description.

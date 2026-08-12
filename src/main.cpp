@@ -27,7 +27,7 @@ using core::RunMode;
 constexpr size_t kChunkFrames = 240;
 
 // Application version reported by --version and the menu banner.
-constexpr const char* kAppVersion = "1.7.0";
+constexpr const char* kAppVersion = "1.7.1";
 
 // Level test duration used by the interactive menu.
 constexpr double kMenuMeterSeconds = 5.0;
@@ -356,6 +356,12 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
     Config config = initial;
     config.mode = RunMode::kRecordWav;
 
+    // The interactive menu has no file option: always record to a fresh
+    // timestamped name (recording_YYYYMMDDHHMM.<ext>).
+    if (config.outputFile.empty()) {
+        config.outputFile = core::defaultOutputName("wav");
+    }
+
     while (true) {
         std::printf("\n");
         std::printf("============================================================\n");
@@ -422,10 +428,10 @@ int runMenuMode(audio::INMP441& mic, const Config& initial) {
             case '3':
                 if (config.mode == RunMode::kRecordMp3) {
                     config.mode = RunMode::kRecordWav;
-                    config.outputFile = "output/recording.wav";
+                    config.outputFile = core::defaultOutputName("wav");
                 } else {
                     config.mode = RunMode::kRecordMp3;
-                    config.outputFile = "output/recording.mp3";
+                    config.outputFile = core::defaultOutputName("mp3");
                 }
                 break;
             case '4': {

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <vector>
 
 namespace core {
@@ -54,6 +55,15 @@ bool isSupportedRate(uint32_t rate) {
 
 }  // namespace
 
+std::string defaultOutputName(const char* extension) {
+    std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    localtime_r(&now, &tm);
+    char stamp[16] = {0};
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d%H%M", &tm);
+    return std::string("output/recording_") + stamp + "." + extension;
+}
+
 Config parseArgs(int argc, char* argv[]) {
     Config config;
 
@@ -79,13 +89,15 @@ Config parseArgs(int argc, char* argv[]) {
             config.mode = RunMode::kRecordWav;
             if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-') {
                 config.outputFile = args[++i];
+            } else {
+                config.outputFile = defaultOutputName("wav");
             }
         } else if (arg == "--mp3") {
             config.mode = RunMode::kRecordMp3;
             if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-') {
                 config.outputFile = args[++i];
             } else {
-                config.outputFile = "output/recording.mp3";
+                config.outputFile = defaultOutputName("mp3");
             }
         } else if (arg == "--dump") {
             config.mode = RunMode::kDumpRawWords;
@@ -178,6 +190,12 @@ Config parseArgs(int argc, char* argv[]) {
         return config;
     }
 
+    // Record modes without an explicit file name get a timestamped default
+    // (e.g. output/recording_202608121137.wav).
+    if (isRecordMode(config.mode) && config.outputFile.empty()) {
+        config.outputFile = defaultOutputName(config.mode == RunMode::kRecordMp3 ? "mp3" : "wav");
+    }
+
     return config;
 }
 
@@ -193,9 +211,9 @@ void printUsage() {
         "                          (duration/channel/format, record, level test)\n"
         "  --level                 Live RMS/peak meter\n"
         "  --wav [file.wav]        Record audio to a 16-bit PCM WAV file\n"
-        "                          (default: output/recording.wav)\n"
+        "                          (default: output/recording_YYYYMMDDHHMM.wav)\n"
         "  --mp3 [file.mp3]        Record to a temp WAV then encode to MP3\n"
-        "                          with lame (default: output/recording.mp3)\n"
+        "                          with lame (default: output/recording_YYYYMMDDHHMM.mp3)\n"
         "  --dump [count]          Dump N raw 32-bit I2S words and exit (debug)\n"
         "  --info                  Print hardware/configuration info and exit\n"
         "\n"

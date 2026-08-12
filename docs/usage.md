@@ -13,9 +13,13 @@ Options:
                              (this is the default).
       --level                Live RMS/peak meter.
       --wav [FILE]           Record audio to a 16-bit PCM WAV file
-                             (default: output/recording.wav).
+                             (default: output/recording_YYYYMMDDHHMM.wav).
       --mp3 [FILE]           Record to a temp WAV then encode to MP3 with lame
-                             (default: output/recording.mp3).
+                             (default: output/recording_YYYYMMDDHHMM.mp3).
+
+When no file name is given, the default includes a local-time stamp down to
+the minute, e.g. `output/recording_202608121137.wav`, so each recording gets
+its own file. An explicit `--wav mic.wav` / `--mp3 test.mp3` is kept as-is.
       --dump [N]             Dump N raw 32-bit I2S words and exit (default 16).
       --info                 Print hardware/configuration info and exit.
   -r, --rate <HZ>            Sample rate: 8000,16000,32000,44100,48000
