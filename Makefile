@@ -33,7 +33,7 @@ CXXFLAGS_EXTRA ?=
 CXXFLAGS   := $(OPT_FLAGS) -std=$(CXXSTD) $(WARNINGS) -I$(INC_DIR) \
               -I$(INC_DIR)/oled -I$(INC_DIR)/sound -I$(INC_DIR)/tools \
               -I$(BCM2835_INCLUDE) $(CXXFLAGS_EXTRA) -MMD -MP
-LDLIBS     := -lbcm2835 -lmpg123 -lao
+LDLIBS     := -lbcm2835 -lmpg123 -lao -latomic  # -latomic: std::atomic<double> (8 B) calls __atomic_* on 32-bit ARM
 BCM2835_LIB ?= $(LDLIBS)
 LDFLAGS    := $(BCM2835_LIB) -lm -pthread
 
