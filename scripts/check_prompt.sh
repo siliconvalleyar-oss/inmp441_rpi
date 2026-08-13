@@ -3,8 +3,9 @@
 # check_prompt.sh - the "PROMPT.md loop": detect new feature requests.
 #
 # The workflow: PROMPT.md keeps the user's pending requests. Each time work
-# finishes, run this script; if it reports new items, implement them, commit,
-# and run it again until it says there is nothing new.
+# finishes, run this script; if it reports new items, implement them, update
+# TODO.md (the verification checklist), commit, and run it again until it says
+# there is nothing new.
 #
 # Usage:
 #   bash scripts/check_prompt.sh
@@ -30,6 +31,7 @@ echo "PROMPT.md: NEW ITEMS DETECTED (uncommitted changes):"
 echo "-----------------------------------------------------"
 git diff -- PROMPT.md
 echo "-----------------------------------------------------"
-echo "Implement the new items, commit, then re-run this script until"
-echo "it reports no changes (that closes the loop)."
+echo "Implement the new items, update TODO.md with the verification"
+echo "checklist, commit, then re-run this script until it reports no"
+echo "changes (that closes the loop)."
 exit 1
