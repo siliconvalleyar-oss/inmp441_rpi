@@ -14,7 +14,9 @@
 # messages below for the exact commands.
 #
 # The bcm2835 library is cross-compiled automatically into a local sysroot
-# (no root needed): ${HOME}/arm-sysroot by default, override with ARM_SYSROOT.
+# (no root needed). The sysroot location is auto-detected: ${HOME}/arm-sysroot
+# or /mnt/disk/arm-sysroot (first one found populated); override with
+# ARM_SYSROOT for any other location.
 #
 # Linking notes (IMPORTANT):
 #   The PC toolchain (e.g. Ubuntu 24.04 / Mint 22) ships glibc 2.39 headers
@@ -51,8 +53,8 @@
 #     scp pi@<pi-ip>:/tmp/arm_headers.tgz /tmp/ && tar xzf /tmp/arm_headers.tgz -C "${ARM_SYSROOT}"
 #
 # Usage:
-#   bash scripts/cross_build.sh
-#   ARM_SYSROOT=/mnt/disk/arm-sysroot bash scripts/cross_build.sh
+#   bash scripts/cross_build.sh   (sysroot auto-detected, see above)
+#   ARM_SYSROOT=/path/to/sysroot bash scripts/cross_build.sh  (explicit override)
 #
 # The resulting binary runs on the Pi, e.g.:
 #   scp bin/inmp441_rpi pi@<pi-ip>:/tmp/ && ssh pi@<pi-ip> 'sudo /tmp/inmp441_rpi --version'
@@ -75,7 +77,25 @@ CROSS_CXX="arm-linux-gnueabihf-g++"
 CROSS_CC="arm-linux-gnueabihf-gcc"
 CROSS_NM="arm-linux-gnueabihf-nm"
 CROSS_OBJDUMP="arm-linux-gnueabihf-objdump"
-ARM_SYSROOT="${ARM_SYSROOT:-${HOME}/arm-sysroot}"
+
+# Sysroot selection: an explicit ARM_SYSROOT always wins; otherwise the first
+# *populated* candidate below is used, so the script just works on machines
+# that keep the sysroot somewhere else (e.g. /mnt/disk/arm-sysroot). If none
+# is populated, fall back to ${HOME}/arm-sysroot and let the "populate from
+# the Pi" error below guide the user.
+if [[ -n "${ARM_SYSROOT:-}" ]]; then
+    :  # explicit override, used as-is
+else
+    ARM_SYSROOT=""
+    for candidate in "${HOME}/arm-sysroot" "/mnt/disk/arm-sysroot"; do
+        if [[ -d "${candidate}" && -f "${candidate}/usr/lib/arm-linux-gnueabihf/crt1.o" ]]; then
+            ARM_SYSROOT="${candidate}"
+            break
+        fi
+    done
+    ARM_SYSROOT="${ARM_SYSROOT:-${HOME}/arm-sysroot}"
+fi
+log "Using sysroot: ${ARM_SYSROOT}"
 
 # ---- 1. Cross toolchain -----------------------------------------------------
 command -v "${CROSS_CXX}" >/dev/null 2>&1 || die \
