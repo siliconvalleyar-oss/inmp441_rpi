@@ -41,7 +41,7 @@ using SOUND_LIST::TrackList;
 constexpr size_t kChunkFrames = 240;
 
 // Application version reported by --version and the menu banner.
-constexpr const char* kAppVersion = "1.7.6";
+constexpr const char* kAppVersion = "1.7.7";
 
 // Version shown at runtime: read from the VERSION file at the working
 // directory (the repo root when launched with make run), so the menu banner

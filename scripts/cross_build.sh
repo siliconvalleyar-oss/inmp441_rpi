@@ -9,9 +9,15 @@
 # One-time requirements. Either install the ARM audio libs with apt
 # (needs root):
 #   sudo dpkg --add-architecture armhf && sudo apt-get update
-#   sudo apt-get install g++-arm-linux-gnueabihf libmpg123-dev:armhf libao-dev:armhf
+#   sudo apt-get install g++-10-arm-linux-gnueabihf libmpg123-dev:armhf libao-dev:armhf
 # or copy them from a Pi into the sysroot (no root needed), see the error
 # messages below for the exact commands.
+#
+# IMPORTANT: the cross compiler MUST be GCC 10 (g++-10-arm-linux-gnueabihf).
+# A GCC 13 cross build is ABI-incompatible with bullseye's libstdc++ 6.0.28
+# and produces binaries that crash (the recorder menu segfaults on any input).
+# The script refuses to build with GCC 13; see the "Compiler" section for how
+# to supply a GCC 10 toolchain without root (extracted .debs).
 #
 # The bcm2835 library is cross-compiled automatically into a local sysroot
 # (no root needed). The sysroot location is auto-detected: ${HOME}/arm-sysroot
@@ -73,8 +79,60 @@ die()  { echo -e "${RED}[error]${NC} $*" >&2; exit 1; }
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-CROSS_CXX="arm-linux-gnueabihf-g++"
-CROSS_CC="arm-linux-gnueabihf-gcc"
+# ---- 0. Compiler: MUST be GCC 10 -------------------------------------------
+# The Pi (bullseye) ships libstdc++ 6.0.28 (GCC 10). The app has to be
+# compiled with GCC 10: a GCC 13 build is ABI-incompatible with that runtime
+# (the GCC 13 headers emit newer inline libstdc++ code that crashes against
+# the older shared library - e.g. the recorder menu's std::getline segfaults
+# on every input). GCC 10 keeps headers and runtime consistent.
+#
+# Lookup order:
+#   1. arm-linux-gnueabihf-g++-10 on PATH (apt-installed)
+#   2. CROSS_GCC10_DIR (explicit override)
+#   3. Common locations for an extracted package (no root needed):
+#      ${HOME}/gcc10-cross, /mnt/disk/gcc10-cross, /opt/gcc10-cross
+#
+# Extracted layout (no-root alternative to apt):
+#   mkdir -p ~/gcc10-cross && cd ~/gcc10-cross
+#   apt-get download g++-10-arm-linux-gnueabihf gcc-10-arm-linux-gnueabihf \
+#       cpp-10-arm-linux-gnueabihf libstdc++-10-dev-armhf-cross \
+#       libgcc-10-dev-armhf-cross
+#   for d in *.deb; do dpkg-deb -x "$d" .; done
+CROSS_CXX="$(command -v arm-linux-gnueabihf-g++-10 || true)"
+GCC10_DIR=""
+if [[ -z "${CROSS_CXX}" ]]; then
+    for candidate in "${CROSS_GCC10_DIR:-}" "${HOME}/gcc10-cross" \
+                     "/mnt/disk/gcc10-cross" "/opt/gcc10-cross"; do
+        if [[ -x "${candidate}/usr/bin/arm-linux-gnueabihf-g++-10" ]]; then
+            CROSS_CXX="${candidate}/usr/bin/arm-linux-gnueabihf-g++-10"
+            GCC10_DIR="${candidate}"
+            break
+        fi
+    done
+fi
+if [[ -z "${CROSS_CXX}" ]]; then
+    die "GCC 10 cross toolchain missing. GCC 13 cross builds are\n" \
+        "ABI-incompatible with bullseye's libstdc++ 6.0.28 and produce\n" \
+        "binaries that crash (std::getline segfault). Install GCC 10:\n" \
+        "  sudo apt-get install g++-10-arm-linux-gnueabihf\n" \
+        "or extract the .debs into ~/gcc10-cross (see header comment)."
+fi
+
+# An extracted (non-installed) toolchain needs the ARM binutils on the PATH:
+# the GCC 10 driver invokes plain 'as'/'ld', which would otherwise resolve to
+# the host's x86_64 tools. ~/gcc10-cross/bin gets symlinks to the ARM ones.
+if [[ -n "${GCC10_DIR}" ]]; then
+    mkdir -p "${GCC10_DIR}/bin"
+    for t in as ld ar nm objdump objcopy ranlib strip readelf; do
+        [[ -e "${GCC10_DIR}/bin/${t}" ]] || \
+            ln -sf "/usr/bin/arm-linux-gnueabihf-${t}" "${GCC10_DIR}/bin/${t}"
+    done
+    export PATH="${GCC10_DIR}/bin:${PATH}"
+fi
+
+log "Using compiler: ${CROSS_CXX}"
+CROSS_CC="$(dirname "${CROSS_CXX}")/arm-linux-gnueabihf-gcc-10"
+[[ -x "${CROSS_CC}" ]] || CROSS_CC="$(command -v arm-linux-gnueabihf-gcc-10)"
 CROSS_NM="arm-linux-gnueabihf-nm"
 CROSS_OBJDUMP="arm-linux-gnueabihf-objdump"
 
@@ -97,12 +155,7 @@ else
 fi
 log "Using sysroot: ${ARM_SYSROOT}"
 
-# ---- 1. Cross toolchain -----------------------------------------------------
-command -v "${CROSS_CXX}" >/dev/null 2>&1 || die \
-    "cross toolchain missing. Install it with:\n" \
-    "  sudo apt-get install g++-arm-linux-gnueabihf"
-
-# ---- 2. ARM audio headers (multiarch) --------------------------------------
+# ---- 1. ARM audio headers (multiarch) --------------------------------------
 if ! echo '#include <mpg123.h>' | "${CROSS_CXX}" -isystem "${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf" -isystem "${ARM_SYSROOT}/usr/include" -E -x c++ - >/dev/null 2>&1 ||
    ! echo '#include <ao/ao.h>'  | "${CROSS_CXX}" -isystem "${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf" -isystem "${ARM_SYSROOT}/usr/include" -E -x c++ - >/dev/null 2>&1; then
     die "ARM versions of mpg123/ao are missing. Fix with one of:\n" \
@@ -116,7 +169,8 @@ if ! echo '#include <mpg123.h>' | "${CROSS_CXX}" -isystem "${ARM_SYSROOT}/usr/in
         "      scp pi@<pi-ip>:/usr/lib/arm-linux-gnueabihf/libao.so* ${ARM_SYSROOT}/lib/"
 fi
 
-# ---- 3. Pi runtime libraries + headers (glibc 2.31 / libstdc++ GCC 10) ------
+# ---- 2. Pi runtime libraries + headers (glibc 2.31 / libstdc++ GCC 10) ------
+# (the header section numbering is kept from the GCC 13-era script)
 # The exact libstdc++ version depends on the Pi the sysroot was populated from
 # (bullseye ships 6.0.28, bookworm 6.0.30...). Derive it with a glob instead
 # of hardcoding it.
@@ -150,7 +204,8 @@ ln -sfn "../../lib/arm-linux-gnueabihf/libgcc_s.so.1"  "${DEVRLIB}/libgcc_s.so"
 ln -sfn "$(basename "${LIBSTDCXX_SO}")"                "${DEVRLIB}/libstdc++.so"
 ln -sfn "arm-linux-gnueabihf/ld-linux-armhf.so.3"      "${ARM_SYSROOT}/lib/ld-linux-armhf.so.3"
 
-# ---- 4. bcm2835 into the local sysroot (no root needed) ---------------------
+# ---- 3. bcm2835 into the local sysroot (no root needed) ---------------------
+# (the header section numbering is kept from the GCC 13-era script)
 BCM2835_VERSION="1.71"
 BCM2835_URL="http://www.airspayce.com/mikem/bcm2835/bcm2835-${BCM2835_VERSION}.tar.gz"
 
@@ -179,7 +234,8 @@ else
     cd "${ROOT_DIR}"
 fi
 
-# ---- 5. Link flags against the Pi runtime sysroot ---------------------------
+# ---- 4. Link flags against the Pi runtime sysroot ---------------------------
+# (the header section numbering is kept from the GCC 13-era script)
 CRT1="${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/crt1.o"
 CRTI="${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/crti.o"
 CRTN="${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/crtn.o"
@@ -214,7 +270,7 @@ SYSROOT_LDFLAGS="-nostdlib -no-pie -nostartfiles \
 -l:libc.so.6 -l:ld-linux-armhf.so.3 \
 ${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/libc_nonshared.a"
 
-# ---- 6. Build ---------------------------------------------------------------
+# ---- 5. Build ---------------------------------------------------------------
 log "Cleaning previous build (may contain host/Pi objects)..."
 make clean >/dev/null 2>&1 || true
 mkdir -p obj
@@ -245,25 +301,18 @@ done < <("${CROSS_CXX}" -v -E -x c++ /dev/null 2>&1 \
     | grep -E '^ /' | sed 's|^ ||')
 SYSROOT_CPPFLAGS+=" -isystem ${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf -isystem ${ARM_SYSROOT}/usr/include"
 
-# libstdc++ 11+ compat shim: the GCC 13 toolchain emits a call to
-# std::__throw_bad_array_new_length (GLIBCXX 3.4.29+) that the Pi's GCC 10
-# libstdc++ (6.0.28) does not export. Compile the shim against the toolchain's
-# own libstdc++ 13 headers and link it into the binary.
-log "Compiling libstdc++ compat shim (GCC 13 -> GCC 10 target)..."
-"${CROSS_CXX}" -std=c++17 -O2 ${SYSROOT_CPPFLAGS} \
-    -c scripts/cross/compat_shim.cpp -o obj/compat_shim.o
-
+# GCC 10's libstdc++ already matches the Pi's runtime, so no compat shim is
+# needed (the GCC 13-era scripts/cross/compat_shim.cpp stays for reference).
 log "Cross-compiling with ${CROSS_CXX} (sysroot: ${ARM_SYSROOT})..."
 make -j"$(nproc)" \
     CXX="${CROSS_CXX}" \
     CXXFLAGS_EXTRA="${SYSROOT_CPPFLAGS}" \
     BCM2835_INCLUDE="${ARM_SYSROOT}/include" \
     BCM2835_LIB="${SYSROOT_LDFLAGS}" \
-    COMPAT_OBJS="obj/compat_shim.o" \
     CRT_BEGIN="${CRT1} ${CRTI} ${CRTBEGIN}" \
     CRT_END="${CRTEND} ${CRTN}"
 
-# ---- 7. Verify --------------------------------------------------------------
+# ---- 6. Verify --------------------------------------------------------------
 log "Verifying (GLIBC/GLIBCXX must be <= bullseye: GLIBC_2.31 / GLIBCXX_3.4.28)..."
 file bin/inmp441_rpi
 
