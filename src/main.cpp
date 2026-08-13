@@ -41,7 +41,7 @@ using SOUND_LIST::TrackList;
 constexpr size_t kChunkFrames = 240;
 
 // Application version reported by --version and the menu banner.
-constexpr const char* kAppVersion = "1.7.5";
+constexpr const char* kAppVersion = "1.7.6";
 
 // Version shown at runtime: read from the VERSION file at the working
 // directory (the repo root when launched with make run), so the menu banner
@@ -492,13 +492,15 @@ std::string runCapture(const std::string& cmd) {
     return out;
 }
 
-// Volume (0-100) of the default PulseAudio sink, or -1 if unavailable.
+// Volume of the default PulseAudio sink, or -1 if unavailable. PulseAudio
+// permits volumes above 100% (up to ~150% when the user boosts the sink), so
+// values up to 150 are shown instead of hiding the readout.
 int readPulseVolume() {
     const std::string out = runCapture(
         "pactl list sinks 2>/dev/null | awk -F'/' '/Volume:/"
         "{gsub(/ /,\"\",$2); print $2; exit}'");
     const int v = std::atoi(out.c_str());
-    return (v >= 0 && v <= 100) ? v : -1;
+    return (v >= 0 && v <= 150) ? v : -1;
 }
 
 // Player screen: lists the tracks of output/ and controls playback with
