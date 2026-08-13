@@ -27,3 +27,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Project prompt / tracking docs
+PROMPT.md
