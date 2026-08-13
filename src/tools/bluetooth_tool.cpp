@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <dirent.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -67,6 +68,15 @@ bool BluetoothTool::dropToPulseUser() {
             g_droppedUid = uid;
             g_droppedGid = st.st_gid;
             ::setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
+            // Al bajar de root, HOME sigue siendo /root, pero libpulse
+            // (y por tanto libao) autentica contra PulseAudio con la cookie
+            // de $HOME/.config/pulse/cookie: sin ella el handshake falla y
+            // el audio "se reproduce" sin llegar a ningún sink. Apuntar HOME
+            // al home real del usuario resuelve la autenticación.
+            struct passwd* pw = ::getpwuid(uid);
+            if (pw != nullptr && pw->pw_dir != nullptr && *pw->pw_dir != '\0') {
+                ::setenv("HOME", pw->pw_dir, 1);
+            }
             // Orden obligatorio: primero el grupo, luego el usuario.
             // setresuid(uid, uid, 0): real y effective al usuario (PulseAudio
             // los verifica), saved en 0 para poder restaurar root después.
