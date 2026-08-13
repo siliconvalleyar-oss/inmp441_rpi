@@ -522,7 +522,8 @@ int runPlayerScreen(TrackList& tracks, Player& player, OledDisplay& oled,
     bool quit = false;
 
     std::printf("\033[H\033[2J");
-    std::printf("=== Playback (output/) | Bluetooth: %s ===\n",
+    std::printf("=== Playback v%s (output/) | Bluetooth: %s ===\n",
+                appVersion(),
                 deviceMac.empty() ? "(none)" : deviceMac.c_str());
     std::printf("  w/s or arrows: navigate   space/p: play/pause   "
                 "+/-: volume   q: quit\n\n");
@@ -540,19 +541,43 @@ int runPlayerScreen(TrackList& tracks, Player& player, OledDisplay& oled,
                               st == PLAYER::State::Paused);
         const bool paused = (st == PLAYER::State::Paused);
 
+        const double posSec = playing ? player.position() : 0.0;
+        const double durSec = playing ? player.duration() : 0.0;
+
         oled.showTrack(static_cast<int>(cursor), static_cast<int>(tracks.size()),
                        tracks.nameAt(cursor), playing, paused, scrollOffset,
-                       volume);
+                       volume, appVersion(), posSec, durSec);
 
         // Redraw the console frame (cursor home + per-line clear).
         std::fputs("\033[H", stdout);
-        std::printf("=== Playback (output/) | Bluetooth: %s ===\033[K\n",
+        std::printf("=== Playback v%s (output/) | Bluetooth: %s ===\033[K\n",
+                    appVersion(),
                     deviceMac.empty() ? "(none)" : deviceMac.c_str());
         std::printf("State: %s", paused ? "PAUSED" : (playing ? "PLAYING" : "STOPPED"));
         if (volume >= 0) {
             std::printf(" | Vol: %d%%", volume);
         }
-        std::printf(" | Track %zu/%zu\033[K\n\n", cursor + 1, tracks.size());
+        std::printf(" | Track %zu/%zu\033[K\n", cursor + 1, tracks.size());
+
+        // Barra de progreso (24 celdas ASCII) + tiempo transcurrido / total.
+        {
+            char bar[25];
+            const int filled = (durSec > 0.0)
+                ? static_cast<int>(posSec / durSec * 24.0 + 0.5) : 0;
+            int f = (filled < 0) ? 0 : (filled > 24 ? 24 : filled);
+            for (int i = 0; i < 24; ++i) bar[i] = (i < f) ? '#' : '-';
+            bar[24] = '\0';
+
+            const int pm = static_cast<int>(posSec) / 60;
+            const int ps = static_cast<int>(posSec) % 60;
+            if (durSec > 0.0) {
+                const int tm = static_cast<int>(durSec) / 60;
+                const int ts = static_cast<int>(durSec) % 60;
+                std::printf(" [%s] %d:%02d / %d:%02d\033[K\n", bar, pm, ps, tm, ts);
+            } else {
+                std::printf(" [%s] %d:%02d / --:--\033[K\n", bar, pm, ps);
+            }
+        }
 
         const std::size_t start = (cursor >= 6) ? (cursor - 6) : 0;
         const std::size_t end = (start + 12 < tracks.size()) ? (start + 12) : tracks.size();

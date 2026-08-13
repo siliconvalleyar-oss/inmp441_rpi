@@ -89,13 +89,11 @@ const std::string& TrackList::pathAt(std::size_t index) const {
 std::string TrackList::nameAt(std::size_t index) const {
     if (index >= paths_.size()) return std::string();
 
-    // "output/recording_202608121137.mp3" -> "recording_202608121137"
+    // "output/recording_202608121137.mp3" -> "recording_202608121137.mp3"
+    // (la extensión se conserva para distinguir WAV de MP3 en la lista).
     const std::string& full = paths_[index];
     const size_t slash = full.find_last_of('/');
-    const size_t base = (slash == std::string::npos) ? 0 : slash + 1;
-    const size_t dot = full.find_last_of('.');
-    const size_t end = (dot == std::string::npos || dot < base) ? full.size() : dot;
-    return full.substr(base, end - base);
+    return full.substr(slash == std::string::npos ? 0 : slash + 1);
 }
 
 } // namespace SOUND_LIST

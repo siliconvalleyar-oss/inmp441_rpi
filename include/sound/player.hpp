@@ -60,6 +60,13 @@ public:
     // Ruta de la pista en reproducción (o la última pedida).
     std::string currentFile() const;
 
+    // Duración total de la pista en segundos (0 si se desconoce o no hay
+    // pista). Se usa para dibujar la barra de progreso y el tiempo.
+    double duration() const { return durationSeconds_.load(); }
+
+    // Posición actual de la pista en segundos (0 si no hay pista).
+    double position() const { return positionSeconds_.load(); }
+
 private:
     void playbackLoop();
     void playWav(const std::string& path);  // WAV PCM 16-bit in-process
@@ -69,6 +76,8 @@ private:
     std::atomic<bool> paused_{false};
     std::atomic<bool> playing_{false};
     std::atomic<bool> finished_{false};
+    std::atomic<double> durationSeconds_{0.0};
+    std::atomic<double> positionSeconds_{0.0};
 
     mutable std::mutex fileMutex_;
     std::string file_;

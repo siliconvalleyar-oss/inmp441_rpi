@@ -95,7 +95,10 @@ void OledDisplay::clear() {
 void OledDisplay::showTrack(int index, int total,
                             const std::string& name,
                             bool playing, bool paused,
-                            int scrollOffset, int volumePercent) {
+                            int scrollOffset, int volumePercent,
+                            const std::string& version,
+                            double positionSeconds,
+                            double durationSeconds) {
 #if defined(__arm__) || defined(__aarch64__)
     if (!ready_) return;
 
@@ -130,8 +133,42 @@ void OledDisplay::showTrack(int index, int total,
     }
     drawLine(1, line);
 
-    // Fila 2: ayuda de teclas
-    drawLine(2, "P:pausa  Q:salir");
+    if (playing) {
+        // Fila 2: barra de progreso ASCII (ancho completo de la fila).
+        int filled = (durationSeconds > 0.0)
+            ? static_cast<int>(positionSeconds / durationSeconds *
+                               kMaxNameChars + 0.5)
+            : 0;
+        if (filled < 0) filled = 0;
+        if (filled > kMaxNameChars) filled = kMaxNameChars;
+
+        std::string bar;
+        bar.reserve(kMaxNameChars);
+        for (int i = 0; i < kMaxNameChars; ++i) {
+            bar += (i < filled) ? '#' : '-';
+        }
+        drawLine(2, bar);
+
+        // Fila 3: tiempo transcurrido / total + versión de la app.
+        char timeLine[32];
+        const int pm = static_cast<int>(positionSeconds) / 60;
+        const int ps = static_cast<int>(positionSeconds) % 60;
+        if (durationSeconds > 0.0) {
+            const int tm = static_cast<int>(durationSeconds) / 60;
+            const int ts = static_cast<int>(durationSeconds) % 60;
+            std::snprintf(timeLine, sizeof(timeLine), "%d:%02d/%d:%02d v%s",
+                          pm, ps, tm, ts, version.c_str());
+        } else {
+            std::snprintf(timeLine, sizeof(timeLine), "%d:%02d/--:-- v%s",
+                          pm, ps, version.c_str());
+        }
+        drawLine(3, timeLine);
+    } else {
+        // Parado: ayuda de teclas + versión.
+        drawLine(2, "P:pausa  Q:salir");
+        std::string vline = version.empty() ? std::string("v?") : ("v" + version);
+        drawLine(3, vline);
+    }
 
     oled_->OLEDupdate();
 #endif

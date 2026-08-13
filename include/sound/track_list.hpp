@@ -38,7 +38,8 @@ public:
     // Ruta completa (directorio + nombre + extensión) de la pista `index`.
     const std::string& pathAt(std::size_t index) const;
 
-    // Nombre mostrable de la pista `index` (sin directorio ni extensión).
+    // Nombre mostrable de la pista `index` (sin directorio, con extensión
+    // .wav/.mp3 para distinguir el formato de cada grabación).
     std::string nameAt(std::size_t index) const;
 
     const std::vector<std::string>& paths() const { return paths_; }

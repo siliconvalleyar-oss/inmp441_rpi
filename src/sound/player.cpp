@@ -132,6 +132,8 @@ void Player::play(const std::string& path) {
     paused_ = false;
     finished_ = false;
     playing_ = true;
+    durationSeconds_ = 0.0;
+    positionSeconds_ = 0.0;
     thread_ = std::thread(&Player::playbackLoop, this);
 }
 
@@ -143,6 +145,8 @@ void Player::stop() {
     }
     playing_ = false;
     finished_ = false;  // una parada deliberada no es un fin natural de pista
+    durationSeconds_ = 0.0;
+    positionSeconds_ = 0.0;
 }
 
 void Player::togglePause() {
@@ -202,6 +206,14 @@ void Player::playbackLoop() {
     mpg123_format_none(mh);
     mpg123_format(mh, rate, channels, MPG123_ENC_SIGNED_16);
 
+    // Duración total: mpg123_length está en muestras por canal. Puede
+    // devolver <= 0 en streams/duraciones desconocidas: en ese caso la
+    // barra de progreso se dibuja sin total (--:--).
+    const long totalSamples = mpg123_length(mh);
+    if (totalSamples > 0 && rate > 0) {
+        durationSeconds_ = static_cast<double>(totalSamples) / static_cast<double>(rate);
+    }
+
     ao_sample_format fmt{};
     fmt.bits = 16;
     fmt.rate = static_cast<int>(rate);
@@ -251,6 +263,11 @@ void Player::playbackLoop() {
 
         if (done > 0) {
             ao_play(dev, reinterpret_cast<char*>(buf.data()), static_cast<int>(done));
+            // Posición actual (mpg123_tell está en muestras por canal).
+            const long pos = mpg123_tell(mh);
+            if (pos > 0 && rate > 0) {
+                positionSeconds_ = static_cast<double>(pos) / static_cast<double>(rate);
+            }
         }
     }
 
@@ -262,6 +279,7 @@ void Player::playbackLoop() {
     playing_ = false;
     paused_ = false;
     finished_ = true;
+    if (durationSeconds_ > 0.0) positionSeconds_ = durationSeconds_.load();
 }
 
 // Reproduce un WAV PCM de 16 bits (mono o estéreo) directamente: lee la
@@ -332,6 +350,12 @@ void Player::playWav(const std::string& path) {
         return;
     }
 
+    // Duración total del WAV: dataSize / (rate * canales * 2 bytes).
+    const double bytesPerSec = static_cast<double>(rate) * channels * 2.0;
+    if (bytesPerSec > 0.0) {
+        durationSeconds_ = static_cast<double>(dataSize) / bytesPerSec;
+    }
+
     ao_sample_format fmt{};
     fmt.bits = 16;
     fmt.rate = rate;
@@ -350,6 +374,7 @@ void Player::playWav(const std::string& path) {
     }
 
     std::vector<unsigned char> buf(8192);
+    long bytesPlayed = 0;
     while (!stopRequested_.load()) {
         // Mientras esté en pausa, no leemos más datos.
         while (paused_.load() && !stopRequested_.load()) {
@@ -364,6 +389,10 @@ void Player::playWav(const std::string& path) {
         const std::size_t n = std::fread(buf.data(), 1, want, f);
         if (n == 0) break;
         dataSize -= static_cast<long>(n);
+        bytesPlayed += static_cast<long>(n);
+        if (bytesPerSec > 0.0) {
+            positionSeconds_ = static_cast<double>(bytesPlayed) / bytesPerSec;
+        }
         ao_play(dev, reinterpret_cast<char*>(buf.data()), static_cast<int>(n));
     }
 
@@ -372,6 +401,7 @@ void Player::playWav(const std::string& path) {
     playing_ = false;
     paused_ = false;
     finished_ = true;
+    if (durationSeconds_ > 0.0) positionSeconds_ = durationSeconds_.load();
 }
 
 } // namespace PLAYER

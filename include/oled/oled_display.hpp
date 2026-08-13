@@ -50,12 +50,18 @@ public:
     // Pantalla principal del reproductor:
     //   fila 0 -> estado (reproduciendo/pausa) + "03/12" + volumen
     //   fila 1 -> nombre del tema (con desplazamiento si es largo)
-    //   fila 2 -> ayuda de teclas
+    //   fila 2 -> reproduciendo: barra de progreso; parado: ayuda de teclas
+    //   fila 3 -> reproduciendo: tiempo "0:42/2:15" + versión; parado: versión
     // `volumePercent` >= 0 muestra el volumen; negativo lo omite.
+    // `version` es la versión de la app ("1.7.4"); `positionSeconds` y
+    // `durationSeconds` alimentan la barra y el tiempo (0 = desconocido).
     void showTrack(int index, int total,
                    const std::string& name,
                    bool playing, bool paused,
-                   int scrollOffset, int volumePercent = -1);
+                   int scrollOffset, int volumePercent = -1,
+                   const std::string& version = std::string(),
+                   double positionSeconds = 0.0,
+                   double durationSeconds = 0.0);
 
     // Mensaje de dos líneas (usado para arranque / estado BT).
     void showMessage(const std::string& line1, const std::string& line2 = "");
