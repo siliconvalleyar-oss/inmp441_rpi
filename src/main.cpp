@@ -261,6 +261,9 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
     size_t dropoutFrames = 0;
     bool inDropout = false;
 
+    // Output samples clamped to full scale (diagnosis aid: --gain too high).
+    size_t clipCount = 0;
+
     // Optional live VU meter drawn to stderr during the recording.
     audio::RmsAnalyzer recordMeter;
     const auto meterInterval =
@@ -290,9 +293,6 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
                 nextMeter = now + meterInterval;
             }
         }
-
-        // Output samples clamped to full scale (diagnosis aid: --gain too high).
-        size_t clipCount = 0;
 
         for (size_t i = 0; i < read; ++i) {
             const int32_t leftSample = frames[i].left24;
