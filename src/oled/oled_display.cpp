@@ -19,7 +19,12 @@
 
 #include "oled_display.hpp"
 
+#include <cstdint>
 #include <cstdio>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/i2c-dev.h>
 
 #if defined(__arm__) || defined(__aarch64__)
 #include <bcm2835.h>
@@ -29,6 +34,30 @@
 #include "core/Logger.hpp"
 
 namespace OLED {
+
+namespace {
+// Dirección I2C del display SSD1306 (0x3C).
+constexpr std::uint8_t kI2cAddress = 0x3C;
+
+// Sondeo acotado del bus I2C con el driver del kernel (/dev/i2c-1): si el
+// display no responde ACK, no se inicializa la librería SSD1306, que con
+// hardware ausente se queda en un bucle de espera infinito y cuelga la app.
+// El driver del kernel acota la transacción en el tiempo, así que esto
+// nunca se bloquea.
+bool i2cProbe(std::uint8_t address) {
+    const int fd = ::open("/dev/i2c-1", O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        return false;
+    }
+    bool ok = false;
+    if (::ioctl(fd, I2C_SLAVE, address) == 0) {
+        const char cmd = 0x00;  // byte nulo: solo comprueba el ACK
+        ok = ::write(fd, &cmd, 1) == 1;
+    }
+    ::close(fd);
+    return ok;
+}
+}  // namespace
 
 OledDisplay::OledDisplay()
     : oled_(nullptr) {
@@ -52,6 +81,16 @@ bool OledDisplay::init() {
     return false;
 #else
     if (oled_ == nullptr) return false;
+
+    // Si no hay display en el bus, la librería SSD1306 se queda esperando
+    // ACK para siempre (bucle de 100 ms sin salida) y la app se congela en
+    // el modo reproductor. Sondeo acotado antes de inicializarla.
+    if (!i2cProbe(kI2cAddress)) {
+        core::Logger::instance().warning(
+            "OLED: no display at 0x%02X on /dev/i2c-1; continuing without display",
+            kI2cAddress);
+        return false;
+    }
 
     // bcm2835 ya está inicializado por el controlador I2S; bcm2835_init()
     // es idempotente, así que llamarlo aquí es seguro.
