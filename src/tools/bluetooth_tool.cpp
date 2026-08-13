@@ -153,6 +153,10 @@ bool BluetoothTool::connect(const std::string& mac) {
 }
 
 bool BluetoothTool::connect(const BluetoothConfig& config) {
+    // systemd-rfkill (o un servicio) vuelve a bloquear el adaptador tras el
+    // arranque: limpiar el soft-block antes de encenderlo evita el fallo
+    // "adapter-not-powered" que hacía imposible conectar el altavoz.
+    unblockRfkill();
     log().info("Bluetooth: powering on adapter...");
     run("timeout 10 bluetoothctl power on >/dev/null 2>&1");
 
@@ -221,6 +225,38 @@ bool BluetoothTool::connect(const BluetoothConfig& config) {
 bool BluetoothTool::disconnect(const std::string& mac) {
     log().info("Bluetooth: disconnecting %s ...", mac.c_str());
     return run("timeout 5 bluetoothctl disconnect " + mac + " >/dev/null 2>&1") == 0;
+}
+
+void BluetoothTool::unblockRfkill() {
+    // sysfs es escribible solo por root; en ejecución sin sudo no se puede
+    // (el servicio unblock-bluetooth.service del arranque ya lo desbloquea).
+    if (::geteuid() != 0) {
+        return;
+    }
+    DIR* dir = ::opendir("/sys/class/rfkill");
+    if (dir == nullptr) {
+        return;
+    }
+    while (struct dirent* entry = ::readdir(dir)) {
+        if (entry->d_name[0] == '.') continue;
+        const std::string base = std::string("/sys/class/rfkill/") + entry->d_name;
+
+        FILE* typeFile = ::fopen((base + "/type").c_str(), "r");
+        if (typeFile == nullptr) continue;
+        char type[32] = {};
+        const bool isBt = ::fscanf(typeFile, "%31s", type) == 1 &&
+                          std::string(type) == "bluetooth";
+        ::fclose(typeFile);
+        if (!isBt) continue;
+
+        FILE* soft = ::fopen((base + "/soft").c_str(), "w");
+        if (soft != nullptr) {
+            std::fprintf(soft, "0");
+            ::fclose(soft);
+            log().info("Bluetooth: rfkill soft-block cleared (%s)", entry->d_name);
+        }
+    }
+    ::closedir(dir);
 }
 
 bool BluetoothTool::isConnected(const std::string& mac) {
