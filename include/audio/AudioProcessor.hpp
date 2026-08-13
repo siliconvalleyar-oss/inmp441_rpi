@@ -31,9 +31,14 @@ private:
 };
 
 // One-pole high-pass filter (DC blocker) with an adjustable cutoff, applied to
-// 16-bit samples BEFORE the digital gain. Removes the INMP441's DC offset and
+// 24-bit samples BEFORE the digital gain. Removes the INMP441's DC offset and
 // the sub-bass hum of the power rail, which the gain would otherwise amplify
 // into clipping/saturation. A cutoff of 0 Hz disables the filter (bypass).
+//
+// Processing runs in the 24-bit domain (int32, normalized by 2^23): the
+// INMP441 is a 24-bit ADC, and quantizing to 16-bit before filtering + gain
+// would amplify 16-bit quantization noise by the gain. The state is float and
+// the output is clamped to the 24-bit range.
 // Header-only so the host unit tests (which link only the test translation
 // unit, see Makefile `test` target) can exercise it without extra link steps.
 class HighPassFilter {
@@ -59,21 +64,21 @@ public:
         prevY_ = 0.0;
     }
 
-    int16_t process(int16_t sample) {
+    int32_t process(int32_t sample) {
         if (!enabled_) {
             return sample;
         }
-        const double x = static_cast<double>(sample) / 32768.0;
+        const double x = static_cast<double>(sample) / 8388608.0;
         const double y = x - prevX_ + coeffR_ * prevY_;
         prevX_ = x;
         prevY_ = y;
-        long v = static_cast<long>(y * 32768.0);
-        if (v > 32767L) {
-            v = 32767L;
-        } else if (v < -32768L) {
-            v = -32768L;
+        long v = static_cast<long>(y * 8388608.0);
+        if (v > 8388607L) {
+            v = 8388607L;
+        } else if (v < -8388608L) {
+            v = -8388608L;
         }
-        return static_cast<int16_t>(v);
+        return static_cast<int32_t>(v);
     }
 
 private:
@@ -83,7 +88,7 @@ private:
     bool enabled_ = false;
 };
 
-// One-pole low-pass filter with an adjustable cutoff, applied to 16-bit samples
+// One-pole low-pass filter with an adjustable cutoff, applied to 24-bit samples
 // AFTER the high-pass filter. Attenuates high-frequency noise and the INMP441's
 // ultrasonic response. A cutoff of 0 Hz disables the filter (bypass).
 class LowPassFilter {
@@ -106,20 +111,20 @@ public:
         prevY_ = 0.0;
     }
 
-    int16_t process(int16_t sample) {
+    int32_t process(int32_t sample) {
         if (!enabled_) {
             return sample;
         }
-        const double x = static_cast<double>(sample) / 32768.0;
+        const double x = static_cast<double>(sample) / 8388608.0;
         const double y = coeffAlpha_ * x + (1.0 - coeffAlpha_) * prevY_;
         prevY_ = y;
-        long v = static_cast<long>(y * 32768.0);
-        if (v > 32767L) {
-            v = 32767L;
-        } else if (v < -32768L) {
-            v = -32768L;
+        long v = static_cast<long>(y * 8388608.0);
+        if (v > 8388607L) {
+            v = 8388607L;
+        } else if (v < -8388608L) {
+            v = -8388608L;
         }
-        return static_cast<int16_t>(v);
+        return static_cast<int32_t>(v);
     }
 
 private:

@@ -18,9 +18,22 @@ inline int32_t rawToSample24(uint32_t raw) {
     return static_cast<int32_t>(raw) >> 8;
 }
 
-// Narrow a 24-bit sample to 16-bit (arithmetic shift preserves the sign).
+// Narrow a 24-bit sample to 16-bit. Rounds to the nearest integer (half away
+// from zero) before the shift instead of truncating, so the conversion does
+// not bias the sample toward -inf and does not amplify low-bit noise.
 inline int16_t sample24ToSample16(int32_t sample24) {
-    return static_cast<int16_t>(sample24 >> 8);
+    // Add half a 16-bit LSB (128) before the arithmetic shift: for negatives a
+    // plain +128 would push toward -inf (e.g. -256 -> -1.5 -> -2), so negatives
+    // get +127 which rounds half away from zero symmetrically.
+    const int32_t shifted =
+        (sample24 >= 0 ? (sample24 + 128) : (sample24 + 127)) >> 8;
+    if (shifted > 32767) {
+        return 32767;
+    }
+    if (shifted < -32768) {
+        return -32768;
+    }
+    return static_cast<int16_t>(shifted);
 }
 
 // Convenience: raw 32-bit slot to a 16-bit sample in one step.

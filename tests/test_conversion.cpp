@@ -37,6 +37,11 @@ int main() {
     CHECK(sample24ToSample16(-0x800000) == -0x8000);
     CHECK(rawToSample16(0x7FFF0000U) == 0x7FFF);
     CHECK(rawToSample16(0x80000000U) == -0x8000);
+    // Rounding (not truncation) when narrowing 24 -> 16 bit.
+    CHECK(sample24ToSample16(0x180) == 2);    // 0x180/256 = 1.5 -> rounds up
+    CHECK(sample24ToSample16(-0x180) == -2);  // -1.5 -> rounds down (away from 0)
+    CHECK(sample24ToSample16(0x100) == 1);    // exact
+    CHECK(sample24ToSample16(-0x100) == -1);  // exact
 
     // Float mapping to [-1, 1).
     CHECK(sample24ToFloat(0x7FFFFF) > 0.9999f);
@@ -67,7 +72,7 @@ int main() {
         CHECK(dc.enabled());
         double last = 0.0;
         for (int i = 0; i < 48000; ++i) {  // 1 s at 48 kHz
-            last = static_cast<double>(dc.process(16384)) / 32768.0;
+            last = static_cast<double>(dc.process(8388608 / 2)) / 8388608.0;
         }
         CHECK(std::fabs(last) < 0.01);
 
@@ -81,8 +86,8 @@ int main() {
             for (int i = 0; i < samples; ++i) {
                 const double phase = 2.0 * 3.14159265358979323846 * freq *
                                      static_cast<double>(i) / 48000.0;
-                const int16_t s = static_cast<int16_t>(32767.0 * std::sin(phase));
-                const double out = static_cast<double>(f.process(s)) / 32768.0;
+                const int32_t s = static_cast<int32_t>(8388607.0 * std::sin(phase));
+                const double out = static_cast<double>(f.process(s)) / 8388608.0;
                 if (i >= samples / 2) {  // skip the settling transient
                     sum += out * out;
                     ++counted;
@@ -93,6 +98,47 @@ int main() {
         const double rms20 = settledRms(20.0, 100.0, 48000);
         const double rms800 = settledRms(800.0, 100.0, 48000);
         CHECK(rms20 < rms800 * 0.5);
+    }
+
+    // Low-pass filter (header-only, no hardware needed).
+    {
+        // 0 Hz = disabled pass-through.
+        LowPassFilter bypass;
+        bypass.setCutoffHz(0.0, 48000);
+        CHECK(!bypass.enabled());
+        CHECK(bypass.process(5000) == 5000);
+
+        // DC passes through the LPF (steady-state gain ~1 for DC).
+        LowPassFilter dc;
+        dc.setCutoffHz(8000.0, 48000);
+        CHECK(dc.enabled());
+        int32_t last = 0;
+        for (int i = 0; i < 48000; ++i) {
+            last = dc.process(8388608 / 4);
+        }
+        CHECK(std::fabs(last) > 8388608 / 4 - 200000);  // ~DC preserved
+
+        // A high tone (15 kHz) is attenuated more than a low one (400 Hz).
+        auto settledRms = [](double freq, double cutoff, int samples) {
+            LowPassFilter f;
+            f.setCutoffHz(cutoff, 48000);
+            double sum = 0.0;
+            int counted = 0;
+            for (int i = 0; i < samples; ++i) {
+                const double phase = 2.0 * 3.14159265358979323846 * freq *
+                                     static_cast<double>(i) / 48000.0;
+                const int32_t s = static_cast<int32_t>(8388607.0 * std::sin(phase));
+                const double out = static_cast<double>(f.process(s)) / 8388608.0;
+                if (i >= samples / 2) {
+                    sum += out * out;
+                    ++counted;
+                }
+            }
+            return std::sqrt(sum / static_cast<double>(counted));
+        };
+        const double rms15k = settledRms(15000.0, 8000.0, 48000);
+        const double rms400 = settledRms(400.0, 8000.0, 48000);
+        CHECK(rms15k < rms400 * 0.6);  // one-pole @8k: 15 kHz ~ -6.5 dB vs 400 Hz
     }
 
     if (failures == 0) {

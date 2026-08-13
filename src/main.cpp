@@ -194,9 +194,11 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
 
     bool failed = false;
 
-    // Digital gain (dB -> linear), applied when converting to 16-bit.
-    const float gain =
-        (config.gainDb == 0.0f) ? 1.0f : std::pow(10.0f, static_cast<float>(config.gainDb) / 20.0f);
+    // Digital gain (dB -> linear). Applied in the 24-bit/float domain and the
+    // final quantization to 16-bit happens once, at the very end, so the gain
+    // does NOT amplify the 16-bit quantization noise of an early truncation.
+    const double gain =
+        (config.gainDb == 0.0) ? 1.0 : std::pow(10.0, config.gainDb / 20.0);
 
     // Adjustable one-pole high-pass filter (default 30 Hz, 0 = off). Removes
     // the INMP441's DC offset and the sub-bass hum of the power rail BEFORE
@@ -220,26 +222,35 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
     lpfLeft.setCutoffHz(config.lpfHz, config.sampleRate);
     lpfRight.setCutoffHz(config.lpfHz, config.sampleRate);
 
-    // Applies HPF, then LPF (when enabled), and then the digital gain.
-    auto applyFx = [gain](audio::HighPassFilter& hpf, audio::LowPassFilter& lpf, int16_t sample) -> int16_t {
+    // Applies HPF, then LPF (when enabled), then the digital gain - all in the
+    // 24-bit/float domain - and quantizes to 16-bit with rounding exactly once,
+    // at the end. Preserves the 8 bits of resolution the 24-bit ADC adds over
+    // 16-bit, so the gain does not amplify quantization noise. Clamped samples
+    // are counted in `clipCount` (diagnosis aid when --gain is too high).
+    auto applyFx = [gain](audio::HighPassFilter& hpf, audio::LowPassFilter& lpf,
+                          int32_t sample24, size_t* clipCount) -> int16_t {
         if (hpf.enabled()) {
-            sample = hpf.process(sample);
+            sample24 = hpf.process(sample24);
         }
         if (lpf.enabled()) {
-            sample = lpf.process(sample);
+            sample24 = lpf.process(sample24);
         }
-        if (gain == 1.0f) {
-            return sample;
+        // 24-bit sample -> float [-1, 1), apply gain, then quantize to 16-bit
+        // with rounding. One quantization step for the whole chain.
+        const double v = static_cast<double>(sample24) / 8388608.0 * gain;
+        long out = static_cast<long>(std::lround(v * 32768.0));
+        if (out > 32767L) {
+            out = 32767L;
+            if (clipCount != nullptr) {
+                ++(*clipCount);
+            }
+        } else if (out < -32768L) {
+            out = -32768L;
+            if (clipCount != nullptr) {
+                ++(*clipCount);
+            }
         }
-        const double amplified = static_cast<double>(sample) / 32768.0 *
-                                 static_cast<double>(gain);
-        long v = static_cast<long>(amplified * 32768.0);
-        if (v > 32767L) {
-            v = 32767L;
-        } else if (v < -32768L) {
-            v = -32768L;
-        }
-        return static_cast<int16_t>(v);
+        return static_cast<int16_t>(out);
     };
 
     // Mic dropout detection: consecutive digital-silence (zero) samples.
@@ -280,12 +291,18 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
             }
         }
 
+        // Output samples clamped to full scale (diagnosis aid: --gain too high).
+        size_t clipCount = 0;
+
         for (size_t i = 0; i < read; ++i) {
-            const int16_t leftSample = frames[i].left16();
-            const int16_t rightSample = frames[i].right16();
-            const int16_t activeSample =
+            const int32_t leftSample = frames[i].left24;
+            const int32_t rightSample = frames[i].right24;
+            const int32_t activeSample =
                 config.selectLeftChannel ? leftSample : rightSample;
 
+            // Dropout detection works on the raw 24-bit value: a real zero slot
+            // is digital silence; quiet audio is still non-zero in 24-bit (it
+            // only rounds to zero after the 16-bit truncation).
             if (activeSample == 0) {
                 ++zeroRun;
                 if (zeroRun >= dropoutThreshold && !inDropout) {
@@ -307,10 +324,10 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
             }
 
             if (config.recordStereo) {
-                interleaved[i * 2] = applyFx(hpfLeft, lpfLeft, leftSample);
-                interleaved[i * 2 + 1] = applyFx(hpfRight, lpfRight, rightSample);
+                interleaved[i * 2] = applyFx(hpfLeft, lpfLeft, leftSample, &clipCount);
+                interleaved[i * 2 + 1] = applyFx(hpfRight, lpfRight, rightSample, &clipCount);
             } else {
-                interleaved[i] = applyFx(hpfLeft, lpfLeft, activeSample);
+                interleaved[i] = applyFx(hpfLeft, lpfLeft, activeSample, &clipCount);
             }
         }
 
@@ -335,6 +352,14 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
     } else {
         log.info("no mic dropouts detected (digital-silence threshold %.1f s)",
                  config.dropoutThresholdSeconds);
+    }
+
+    if (clipCount > 0) {
+        const double clipSeconds =
+            static_cast<double>(clipCount) / config.sampleRate;
+        log.warning("CLIPPING: %zu sample(s) (%.2f s) clamped to full scale - "
+                    "lower --gain (try %+.1f dB) for clean audio",
+                    clipCount, clipSeconds, core::clampGainDb(config.gainDb - 6.0));
     }
 
     if (failed) {
