@@ -38,12 +38,17 @@ its own file. An explicit `--wav mic.wav` / `--mp3 test.mp3` is kept as-is.
                              The INMP441 is very quiet for speech: try +20 to
                              +30 dB for close talk, +40 dB for room ambience.
                              Clips at full scale.
-      --hpf <HZ>             High-pass filter cutoff applied before the
-                             digital gain (default 30 Hz; 0 = off). Removes
-                             the mic DC offset and the sub-bass hum of the
-                             power rail, which high gain would otherwise
-                             amplify into clipping/saturation.
-      --dropout <SEC>        Flag runs of digital silence longer than this
+       --hpf <HZ>             High-pass filter cutoff applied before the
+                              digital gain (default 30 Hz; 0 = off). Removes
+                              the mic DC offset and the sub-bass hum of the
+                              power rail, which high gain would otherwise
+                              amplify into clipping/saturation.
+       --lpf <HZ>             Low-pass filter cutoff applied after the HPF
+                              (default 0 Hz; 0 = off). Attenuates high-
+                              frequency noise and the INMP441's ultrasonic
+                              response. Use values like 8000 or 12000 to
+                              reduce hiss.
+       --dropout <SEC>        Flag runs of digital silence longer than this
                              (default 1 s) as mic dropouts in the recording
                              summary; use to diagnose flaky wiring/capsule.
   -c, --channel <left|right> I2S channel the mic is on (default: left).
@@ -67,8 +72,8 @@ its own file. An explicit `--wav mic.wav` / `--mp3 test.mp3` is kept as-is.
 
 Shows a hardware presentation followed by an interactive menu. Options:
 duration (min 5 s for test recordings by default), channel left/right,
-output format WAV/MP3, the high-pass cutoff (option 8), a 5-second level
-test, and record.
+output format WAV/MP3, the high-pass cutoff (option 8), the low-pass cutoff
+(option 9), a 5-second level test, and record.
 
 ```bash
 sudo ./bin/inmp441_rpi
@@ -166,8 +171,8 @@ The application persists its settings to a JSON file (`config.json` by default,
 overridable with `--config`):
 
 - **Sample rate, channel, stereo, duration, warmup, gain, high-pass cutoff
-  (`hpf_hz`), dropout threshold, meter interval, menu format (WAV/MP3) and
-  Bluetooth MAC** (`bt_mac`).
+  (`hpf_hz`), low-pass cutoff (`lpf_hz`), dropout threshold, meter interval,
+  menu format (WAV/MP3) and Bluetooth MAC** (`bt_mac`).
 - Settings are **loaded at startup** and used as defaults; command-line
   options always override the file.
 - They are **saved** with `--save-config` or automatically every time an
@@ -185,6 +190,7 @@ Example:
   "warmup_seconds": 4.0,
   "gain_db": 24.0,
   "hpf_hz": 30.0,
+  "lpf_hz": 0.0,
   "dropout_seconds": 1.0,
   "meter_interval_ms": 120.0,
   "format": "wav",

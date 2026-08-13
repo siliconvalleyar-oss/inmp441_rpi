@@ -211,10 +211,22 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
     hpfLeft.setCutoffHz(config.hpfHz, config.sampleRate);
     hpfRight.setCutoffHz(config.hpfHz, config.sampleRate);
 
-    // Applies the high-pass filter (when enabled) and then the digital gain.
-    auto applyFx = [gain](audio::HighPassFilter& hpf, int16_t sample) -> int16_t {
+    // Adjustable one-pole low-pass filter (default 0 Hz = off). Attenuates
+    // high-frequency noise and the INMP441's ultrasonic response. Use values
+    // like 8000 or 12000 Hz to reduce hiss. Runs AFTER the HPF so the signal
+    // band is clean before the digital gain is applied.
+    audio::LowPassFilter lpfLeft;
+    audio::LowPassFilter lpfRight;
+    lpfLeft.setCutoffHz(config.lpfHz, config.sampleRate);
+    lpfRight.setCutoffHz(config.lpfHz, config.sampleRate);
+
+    // Applies HPF, then LPF (when enabled), and then the digital gain.
+    auto applyFx = [gain](audio::HighPassFilter& hpf, audio::LowPassFilter& lpf, int16_t sample) -> int16_t {
         if (hpf.enabled()) {
             sample = hpf.process(sample);
+        }
+        if (lpf.enabled()) {
+            sample = lpf.process(sample);
         }
         if (gain == 1.0f) {
             return sample;
@@ -269,12 +281,12 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
         }
 
         for (size_t i = 0; i < read; ++i) {
-            const int16_t sample =
-                config.recordStereo
-                    ? (static_cast<int16_t>(frames[i].left16() | frames[i].right16()))
-                    : (config.selectLeftChannel ? frames[i].left16() : frames[i].right16());
+            const int16_t leftSample = frames[i].left16();
+            const int16_t rightSample = frames[i].right16();
+            const int16_t activeSample =
+                config.selectLeftChannel ? leftSample : rightSample;
 
-            if (sample == 0) {
+            if (activeSample == 0) {
                 ++zeroRun;
                 if (zeroRun >= dropoutThreshold && !inDropout) {
                     inDropout = true;
@@ -295,10 +307,10 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
             }
 
             if (config.recordStereo) {
-                interleaved[i * 2] = applyFx(hpfLeft, frames[i].left16());
-                interleaved[i * 2 + 1] = applyFx(hpfRight, frames[i].right16());
+                interleaved[i * 2] = applyFx(hpfLeft, lpfLeft, leftSample);
+                interleaved[i * 2 + 1] = applyFx(hpfRight, lpfRight, rightSample);
             } else {
-                interleaved[i] = applyFx(hpfLeft, sample);
+                interleaved[i] = applyFx(hpfLeft, lpfLeft, activeSample);
             }
         }
 
@@ -767,6 +779,7 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
                     config.selectLeftChannel ? "GND" : "+3V3");
         std::printf("  Gain    : %+.1f dB\n", config.gainDb);
         std::printf("  HPF     : %g Hz high-pass (0 = off)\n", config.hpfHz);
+        std::printf("  LPF     : %g Hz low-pass (0 = off)\n", config.lpfHz);
         std::printf("  Format  : %s\n",
                     config.mode == RunMode::kRecordMp3 ? "MP3 (lame)" : "WAV");
         std::printf("  File    : %s\n", config.outputFile.c_str());
@@ -782,6 +795,7 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
         std::printf("  6) RECORD\n");
         std::printf("  7) Play output/ over Bluetooth\n");
         std::printf("  8) HPF cutoff ...... %g Hz (0 = off)\n", config.hpfHz);
+        std::printf("  9) LPF cutoff ...... %g Hz (0 = off)\n", config.lpfHz);
         std::printf("  0/Q) Quit\n");
         std::printf("------------------------------------------------------------\n");
         std::printf("Choice> ");
@@ -908,12 +922,34 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
                 }
                 break;
             }
+            case '9': {
+                std::printf("Low-pass cutoff in Hz (0 = off, max %.0f) [%g]> ",
+                            core::kMaxLpfHz, config.lpfHz);
+                std::fflush(stdout);
+                std::string value;
+                std::getline(std::cin, value);
+                if (!value.empty()) {
+                    char* end = nullptr;
+                    const double d = std::strtod(value.c_str(), &end);
+                    if (end != value.c_str() && *end == '\0' && std::isfinite(d)) {
+                        config.lpfHz = core::clampLpfHz(d);
+                        if (config.lpfHz != d) {
+                            std::printf("  (clamped to %g Hz)\n", config.lpfHz);
+                        }
+                        log.info("low-pass cutoff set to %g Hz", config.lpfHz);
+                        persistConfig();
+                    } else {
+                        std::printf("  (ignored: must be a number)\n");
+                    }
+                }
+                break;
+            }
             case '0':
             case 'q':
                 std::printf("Bye.\n");
                 return 0;
             default:
-                std::printf("  (invalid choice; try 1-8, 0/Q)\n");
+                std::printf("  (invalid choice; try 1-9, 0/Q)\n");
                 break;
         }
     }

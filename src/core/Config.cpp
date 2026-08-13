@@ -89,6 +89,7 @@ bool loadConfig(Config& config, const std::string& path) {
         config.warmupSeconds = j.value("warmup_seconds", config.warmupSeconds);
         config.gainDb = j.value("gain_db", config.gainDb);
         config.hpfHz = clampHpfHz(j.value("hpf_hz", config.hpfHz));
+        config.lpfHz = clampLpfHz(j.value("lpf_hz", config.lpfHz));
         config.dropoutThresholdSeconds = j.value("dropout_seconds", config.dropoutThresholdSeconds);
         config.meterIntervalMs = j.value("meter_interval_ms", config.meterIntervalMs);
         config.recordMp3 = (j.value("format", std::string("wav")) == "mp3");
@@ -113,6 +114,7 @@ bool saveConfig(const Config& config, const std::string& path) {
     j["warmup_seconds"] = config.warmupSeconds;
     j["gain_db"] = config.gainDb;
     j["hpf_hz"] = config.hpfHz;
+    j["lpf_hz"] = config.lpfHz;
     j["dropout_seconds"] = config.dropoutThresholdSeconds;
     j["meter_interval_ms"] = config.meterIntervalMs;
     j["format"] = config.recordMp3 ? "mp3" : "wav";
@@ -239,6 +241,25 @@ Config parseArgs(int argc, char* argv[], const Config& base) {
                 config.hpfHz = clampHpfHz(config.hpfHz);
             }
             ++i;
+        } else if (arg == "--lpf") {
+            if (i + 1 >= args.size() ||
+                !parseDouble(args[i + 1].c_str(), &config.lpfHz)) {
+                config.valid = false;
+                config.error = "--lpf requires a numeric value (Hz, 0 = off)";
+                return config;
+            }
+            if (!std::isfinite(config.lpfHz)) {
+                config.valid = false;
+                config.error = "--lpf requires a finite numeric value (Hz, 0 = off)";
+                return config;
+            }
+            if (config.lpfHz < 0.0 || config.lpfHz > kMaxLpfHz) {
+                core::Logger::instance().warning(
+                    "--lpf %.1f Hz out of range, clamped to 0..%.0f Hz",
+                    config.lpfHz, kMaxLpfHz);
+                config.lpfHz = clampLpfHz(config.lpfHz);
+            }
+            ++i;
         } else if (arg == "--warmup") {
             if (i + 1 >= args.size() || !parseDouble(args[i + 1].c_str(), &config.warmupSeconds)) {
                 config.valid = false;
@@ -344,6 +365,11 @@ void printUsage() {
         "                          Removes the mic DC offset and the sub-bass\n"
         "                          hum of the power rail, which high gain\n"
         "                          would amplify into clipping/saturation.\n"
+        "      --lpf <hz>          Low-pass filter cutoff applied after the HPF\n"
+        "                          (default 0 Hz; 0 disables). Attenuates\n"
+        "                          high-frequency noise and the INMP441's\n"
+        "                          ultrasonic response. Use values like 8000\n"
+        "                          or 12000 to reduce hiss.\n"
         "      --dropout <sec>      Flag runs of digital silence longer than this\n"
         "                          (default 1 s) as mic dropouts in the recording\n"
         "                          summary (diagnosis of flaky wiring/capsule)\n"
@@ -371,8 +397,9 @@ void printUsage() {
         "\n"
         "Persisted settings:\n"
         "  sample rate, channel, stereo, duration, warmup, gain, high-pass\n"
-        "  cutoff, dropout threshold, meter interval, menu format (WAV/MP3)\n"
-        "  and Bluetooth MAC. CLI options always override the config file.\n"
+        "  cutoff, low-pass cutoff, dropout threshold, meter interval, menu\n"
+        "  format (WAV/MP3) and Bluetooth MAC. CLI options always override\n"
+        "  the config file.\n"
         "\n"
         "Notes:\n"
         "  * Must run as root (the bcm2835 library needs /dev/mem access).\n"

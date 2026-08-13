@@ -30,6 +30,7 @@ struct Config {
     double warmupSeconds = 4.0;      // discard startup transient before recording
     double gainDb = 0.0;             // digital gain applied on write (dB)
     double hpfHz = 30.0;             // high-pass cutoff before gain (Hz); 0 = off
+    double lpfHz = 0.0;              // low-pass cutoff after HPF (Hz); 0 = off
     double dropoutThresholdSeconds = 1.0;  // min digital-silence run to flag
     bool verbose = false;
     uint32_t dumpWordCount = 16;     // words printed by --dump
@@ -69,6 +70,14 @@ constexpr double kMaxHpfHz = 1000.0;
 
 inline double clampHpfHz(double hz) {
     return hz < 0.0 ? 0.0 : (hz > kMaxHpfHz ? kMaxHpfHz : hz);
+}
+
+// Sane range for the low-pass cutoff in Hz (0 disables the filter; the
+// one-pole implementation stays stable well beyond the audio band).
+constexpr double kMaxLpfHz = 20000.0;
+
+inline double clampLpfHz(double hz) {
+    return hz < 0.0 ? 0.0 : (hz > kMaxLpfHz ? kMaxLpfHz : hz);
 }
 
 // Loads persisted settings from `path` into `config` (only the fields stored

@@ -45,8 +45,6 @@ public:
             coeffR_ = 0.0;
         } else {
             enabled_ = true;
-            // R = 1 - 2*pi*fc/fs; stable for fc < fs/pi, well within our
-            // clamped range (0..1000 Hz at 8..48 kHz sample rates).
             coeffR_ = 1.0 - 2.0 * 3.14159265358979323846 * hz /
                       static_cast<double>(sampleRate);
         }
@@ -60,8 +58,6 @@ public:
         prevY_ = 0.0;
     }
 
-    // One-pole high-pass: y[n] = x[n] - x[n-1] + R*y[n-1], on full-scale
-    // 16-bit samples. Returns the filtered sample (unchanged when disabled).
     int16_t process(int16_t sample) {
         if (!enabled_) {
             return sample;
@@ -82,6 +78,51 @@ public:
 private:
     double coeffR_ = 0.0;
     double prevX_ = 0.0;
+    double prevY_ = 0.0;
+    bool enabled_ = false;
+};
+
+// One-pole low-pass filter with an adjustable cutoff, applied to 16-bit samples
+// AFTER the high-pass filter. Attenuates high-frequency noise and the INMP441's
+// ultrasonic response. A cutoff of 0 Hz disables the filter (bypass).
+class LowPassFilter {
+public:
+    void setCutoffHz(double hz, uint32_t sampleRate) {
+        if (hz <= 0.0 || sampleRate == 0) {
+            enabled_ = false;
+            coeffAlpha_ = 0.0;
+        } else {
+            enabled_ = true;
+            coeffAlpha_ = 1.0 - std::exp(-2.0 * 3.14159265358979323846 * hz /
+                                         static_cast<double>(sampleRate));
+        }
+        reset();
+    }
+
+    bool enabled() const { return enabled_; }
+
+    void reset() {
+        prevY_ = 0.0;
+    }
+
+    int16_t process(int16_t sample) {
+        if (!enabled_) {
+            return sample;
+        }
+        const double x = static_cast<double>(sample) / 32768.0;
+        const double y = coeffAlpha_ * x + (1.0 - coeffAlpha_) * prevY_;
+        prevY_ = y;
+        long v = static_cast<long>(y * 32768.0);
+        if (v > 32767L) {
+            v = 32767L;
+        } else if (v < -32768L) {
+            v = -32768L;
+        }
+        return static_cast<int16_t>(v);
+    }
+
+private:
+    double coeffAlpha_ = 0.0;
     double prevY_ = 0.0;
     bool enabled_ = false;
 };

@@ -114,6 +114,15 @@ if (config.warmupSeconds > 0.0) { descartar frames... }
 //    f) writeFrames16() → WAV
 ```
 
+### Mejoras implementadas (v1.7.9)
+
+- **LPF (low-pass filter):** Agregado filtro paso-bajo configurable (`--lpf <Hz>`,
+  opción 9 en el menú). Permite eliminar ruido de alta frecuencia y la respuesta
+  ultrasónica del INMP441. Valores recomendados: 8000–12000 Hz.
+- **Bug stereo corregido:** El modo `--stereo` hacía `left16() | right16()` para
+  la detección de dropouts, destruyendo la información de ambos canales. Ahora
+  la detección usa el canal activo y el interleaving es correcto.
+
 ## 7. Problema conocido: señal tenue y ruidosa en grabaciones
 
 ### Síntomas reportados
@@ -121,7 +130,7 @@ if (config.warmupSeconds > 0.0) { descartar frames... }
 - Luego la señal es muy baja y con ruido de fondo elevado.
 - Se mencionó agregar una opción para "no grabar los agudos" (filtro paso-bajo).
 
-### Causas probables
+### Causas probables (pre-v1.7.9)
 
 1. **INMP441 de bajo nivel de salida:** El INMP441 tiene salida de señal muy baja
    (sensibilidad ~ -26 dBFS a 94 dB SPL). Requiere ganancia digital alta
@@ -133,7 +142,7 @@ if (config.warmupSeconds > 0.0) { descartar frames... }
    o altas (ripple de switching, ruido térmico), el HPF no lo elimina.
 
 3. **Ruido de alta frecuencia:** El micrófono captura ruido eléctrico y
-   ambiental en bandas altas. Un filtro paso-bajo (LPF) ayudaría a reducirlo.
+   ambiental en bandas altas. Un filtro paso-bajo (LPF) ayuda a reducirlo.
 
 4. **Warmup insuficiente:** Si `warmup_seconds` es muy bajo, el transitorio
    de arranque del PCM/I2S y del propio INMP441 se cuela en la grabación
@@ -142,15 +151,15 @@ if (config.warmupSeconds > 0.0) { descartar frames... }
 5. **Clip por ganancia excesiva:** Ganancias muy altas sin HPF previo pueden
    saturar y generar distorsión dura, que se percibe como "ruido".
 
-### Mejoras recomendadas
+### Soluciones disponibles (v1.7.9+)
 
-- **LPF (low-pass filter):** Agregar un filtro paso-bajo configurable
-  (ej: 8 kHz o 12 kHz) para eliminar ruido de alta frecuencia. El usuario
-  mencionó "no grabar los agudos" → esto es un LPF, no el HPF existente.
-- Ajustar el HPF por defecto o hacerlo más configurable.
-- Exponer `--warmup` de forma más visible en el menú.
-- Considerar un compander/expander para mejorar la relación señal/ruido
-  después del HPF y antes de la ganancia.
+- **LPF (`--lpf <Hz>`, opción 9 en menú):** Filtro paso-bajo configurable.
+  Usar valores entre 8000–12000 Hz para reducir el hiss de alta frecuencia.
+- **HPF (`--hpf <Hz>`, opción 8):** Filtro paso-alto configurable (default 30 Hz).
+- **Ganancia alta (`--gain <dB>`):** El INMP441 requiere ganancias de +30 a +49 dB
+  para niveles normales de conversación.
+- **Warmup (`--warmup <SEC>`):** Default 4 segundos; aumentar si hay clics
+  iniciales.
 
 ## 8. Convenciones del proyecto
 
