@@ -48,6 +48,10 @@ los segundos transcurridos, un progress bar y la extensión del archivo.
 
 ## Pendientes operativos (fuera del PROMPT)
 
-- [ ] Limpiar pistas de prueba de `output/` en la Pi (011 / 012 / 013)
-- [ ] Revisar el `stash` viejo en el repo de la Pi (`WIP on 3e65014`)
+- [x] Limpiar pistas de prueba de `output/` en la Pi (010 / 011 / 012 / 013) — eliminadas
+- [x] Revisar el `stash` viejo en el repo de la Pi — son WIP ya superado
+      (stash@{0} = pantalla del player, commiteada como `1ad7d48`;
+      stash@{1} = build/docs, ya en el historial). Se dejaron sin borrar
+      (borrarlos es destructivo); se pueden dropear con `git stash drop`
 - [ ] (opcional) Eliminar headers `c++/10` sin uso que quedaron en el sysroot
+      (el toolchain GCC 10 trae los suyos)
