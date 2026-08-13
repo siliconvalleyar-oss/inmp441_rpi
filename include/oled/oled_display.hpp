@@ -53,7 +53,7 @@ public:
     //   fila 2 -> reproduciendo: barra de progreso; parado: ayuda de teclas
     //   fila 3 -> reproduciendo: tiempo "0:42/2:15" + versión; parado: versión
     // `volumePercent` >= 0 muestra el volumen; negativo lo omite.
-    // `version` es la versión de la app ("1.7.4"); `positionSeconds` y
+    // `version` es la versión de la app ("1.7.5"); `positionSeconds` y
     // `durationSeconds` alimentan la barra y el tiempo (0 = desconocido).
     void showTrack(int index, int total,
                    const std::string& name,

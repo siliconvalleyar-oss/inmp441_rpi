@@ -119,6 +119,14 @@ Keys: `w`/`s` or arrows to change track, `space`/`p` play-pause, `+`/`-`
 volume, `q` to quit. The track name also scrolls on the OLED (if wired).
 The same screen is available from the interactive menu as **option 7**.
 
+The player screen shows the app version in the header and, while a track is
+playing, a **progress bar** plus the **elapsed / total time** (e.g.
+`[####--------] 0:42 / 2:15`); if the total duration cannot be determined
+(streams, unknown length) the time is shown as `--:--` with an empty bar.
+Track names keep their **file extension** (`.wav` / `.mp3`) so both formats
+can be told apart in the list. The same version, bar and time are mirrored
+on the OLED (row 2 = progress bar, row 3 = time + version).
+
 ### `dump`
 
 Prints raw 32-bit I2S slots (pairs = one frame) and exits. Useful for
