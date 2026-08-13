@@ -122,6 +122,8 @@ if (config.warmupSeconds > 0.0) { descartar frames... }
 - **Bug stereo corregido:** El modo `--stereo` hacía `left16() | right16()` para
   la detección de dropouts, destruyendo la información de ambos canales. Ahora
   la detección usa el canal activo y el interleaving es correcto.
+- **Fix compilación (v1.7.10):** Agregado `#include <cmath>` faltante en
+  `AudioProcessor.hpp` para `std::exp` usado por el LPF one-pole.
 
 ## 7. Problema conocido: señal tenue y ruidosa en grabaciones
 
