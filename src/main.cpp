@@ -720,6 +720,10 @@ int runPlayerMode(const Config& config) {
     // grabar). PulseAudio es por-usuario y rechaza a root (Access denied):
     // dropear privilegios al usuario real para que pactl y libao vean el
     // sink Bluetooth, y restaurar root al salir de este modo.
+    //
+    // El desbloqueo rfkill del adaptador solo puede hacerlo root y ademas
+    // debe ejecutarse antes de conectar (que ocurre ya con euid != 0).
+    BluetoothTool::unblockRfkill();
     const bool droppedPrivs = BluetoothTool::dropToPulseUser();
     struct RestorePrivsGuard {
         ~RestorePrivsGuard() {
