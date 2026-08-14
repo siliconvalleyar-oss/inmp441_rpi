@@ -916,6 +916,11 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
             case '6': {
                 // Show the live VU meter while recording from the menu.
                 config.showRecordMeter = true;
+                // Fresh timestamped name per capture: recording twice from the
+                // menu must never overwrite the previous file (the name is
+                // otherwise set once at startup or when the format changes).
+                config.outputFile =
+                    core::defaultOutputName(config.recordMp3 ? "mp3" : "wav");
                 const int rc = (config.mode == RunMode::kRecordMp3)
                                    ? runRecordMp3Mode(mic, config)
                                    : runRecordMode(mic, config);
