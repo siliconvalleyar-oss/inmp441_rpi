@@ -45,6 +45,10 @@ public:
     // Debug helper: reads raw 32-bit slots without interpretation.
     size_t readRawWords(uint32_t* words, size_t wordCount);
 
+    // Restores the RX stream: clears FIFO and RX error flags so the next
+    // readFrames() starts from a clean state. Call before each recording.
+    void resetRxStream();
+
     uint32_t sampleRateHz() const { return sampleRateHz_; }
 
 private:

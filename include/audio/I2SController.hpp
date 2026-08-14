@@ -34,6 +34,12 @@ public:
     // number of words actually read (0 on timeout or error).
     size_t readRaw(uint32_t* buffer, size_t maxWords);
 
+    // Clears RX error flags and both FIFOs, keeping the I2S master running.
+    // Used to restore the stream between recordings: with the clock running
+    // while nothing reads the FIFO, the RX can overrun and go stale, which
+    // otherwise leaves the next recording silent.
+    void resetRx();
+
     uint32_t sampleRateHz() const { return sampleRateHz_; }
 
     // Human-readable static info for the --info mode.

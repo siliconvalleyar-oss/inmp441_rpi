@@ -66,4 +66,8 @@ size_t Inmp441_t::readRawWords(uint32_t* words, size_t wordCount) {
     return controller_.readRaw(words, wordCount);
 }
 
+void Inmp441_t::resetRxStream() {
+    controller_.resetRx();
+}
+
 }  // namespace INMP441

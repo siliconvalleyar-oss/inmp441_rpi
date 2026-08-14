@@ -162,6 +162,11 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
         return false;
     }
 
+    // Entre grabaciones (con el mic siguiendo clockeado pero sin nadie
+    // leyendo el FIFO) el RX puede desbordarse y quedarse en un estado
+    // estale; limpiarlo aqui garantiza que cada grabacion arranque limpia.
+    mic.resetRxStream();
+
     std::vector<audio::AudioFrame> frames(kChunkFrames);
     std::vector<int16_t> interleaved(kChunkFrames * (config.recordStereo ? 2 : 1));
 

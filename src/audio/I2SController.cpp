@@ -351,12 +351,27 @@ size_t I2SController::readRaw(uint32_t* buffer, size_t maxWords) {
                     lastRxWarn = now;
                     core::Logger::instance().warning("RX FIFO timeout waiting for data");
                 }
+                // The stream stalled (stale overrun or mic in silence): clear
+                // the error flags and FIFO so the next read starts fresh.
+                resetRx();
                 return words;
             }
         }
         buffer[words++] = bcm2835_peri_read(reg(kRegFifo));
     }
     return words;
+}
+
+void I2SController::resetRx() {
+    if (!initialized_) {
+        return;
+    }
+    // RXERR/TXERR/RXSYNC/TXSYNC are write-1-to-clear; RXCLR/TXCLR pulse the
+    // FIFO clear. Write them together with the current CS state (which keeps
+    // EN/RXON) so reception resumes cleanly.
+    const uint32_t cs = readReg(kRegCs);
+    writeReg(kRegCs, cs | kCsRxClr | kCsTxClr | kCsRxErr | kCsTxErr |
+                         kCsRxSync | kCsTxSync);
 }
 
 const char* I2SController::boardInfo() {
