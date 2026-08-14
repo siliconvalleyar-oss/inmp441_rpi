@@ -324,7 +324,7 @@ void Player::playWav(const std::string& path) {
                 (static_cast<std::uint32_t>(fmt[6]) << 16) |
                 (static_cast<std::uint32_t>(fmt[7]) << 24));
             bits = fmt[14] | (fmt[15] << 8);
-            if (format != 1 || bits != 16) {
+            if (format != 1 || (bits != 16 && bits != 32)) {
                 playerLog("[PLAYER] unsupported WAV (PCM format %u, %u-bit); "
                           "convert to MP3 or 16-bit PCM WAV\n", format, bits);
                 std::fclose(f);
@@ -350,8 +350,10 @@ void Player::playWav(const std::string& path) {
         return;
     }
 
-    // Duración total del WAV: dataSize / (rate * canales * 2 bytes).
-    const double bytesPerSec = static_cast<double>(rate) * channels * 2.0;
+    // Duración total del WAV: dataSize / (rate * canales * bytes por muestra).
+    const double bytesPerSample = static_cast<double>(bits) / 8.0;
+    const double bytesPerSec =
+        static_cast<double>(rate) * channels * bytesPerSample;
     if (bytesPerSec > 0.0) {
         durationSeconds_ = static_cast<double>(dataSize) / bytesPerSec;
     }
@@ -373,8 +375,11 @@ void Player::playWav(const std::string& path) {
         return;
     }
 
+    // La salida al dispositivo es siempre s16 (bits=16); para un WAV de
+    // 32-bit se descartan los 16 bits bajos de cada muestra sobre la marcha.
     std::vector<unsigned char> buf(8192);
     long bytesPlayed = 0;
+    const double outBytesPerSec = static_cast<double>(rate) * channels * 2.0;
     while (!stopRequested_.load()) {
         // Mientras esté en pausa, no leemos más datos.
         while (paused_.load() && !stopRequested_.load()) {
@@ -386,12 +391,29 @@ void Player::playWav(const std::string& path) {
             std::min(buf.size(), static_cast<std::size_t>(dataSize));
         if (want == 0) break;  // Fin del archivo
 
-        const std::size_t n = std::fread(buf.data(), 1, want, f);
+        std::size_t n = std::fread(buf.data(), 1, want, f);
         if (n == 0) break;
         dataSize -= static_cast<long>(n);
+
+        if (bits == 32) {
+            const std::size_t samples = n / 4;
+            n = samples * 2;
+            for (std::size_t i = 0; i < samples; ++i) {
+                const std::int32_t s = static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(buf[4 * i]) |
+                    (static_cast<std::uint32_t>(buf[4 * i + 1]) << 8) |
+                    (static_cast<std::uint32_t>(buf[4 * i + 2]) << 16) |
+                    (static_cast<std::uint32_t>(buf[4 * i + 3]) << 24));
+                const std::int16_t out = static_cast<std::int16_t>(s >> 16);
+                buf[2 * i] = static_cast<unsigned char>(out & 0xFF);
+                buf[2 * i + 1] =
+                    static_cast<unsigned char>((out >> 8) & 0xFF);
+            }
+        }
+
         bytesPlayed += static_cast<long>(n);
-        if (bytesPerSec > 0.0) {
-            positionSeconds_ = static_cast<double>(bytesPlayed) / bytesPerSec;
+        if (outBytesPerSec > 0.0) {
+            positionSeconds_ = static_cast<double>(bytesPlayed) / outBytesPerSec;
         }
         ao_play(dev, reinterpret_cast<char*>(buf.data()), static_cast<int>(n));
     }
