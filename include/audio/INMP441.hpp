@@ -49,6 +49,14 @@ public:
     // readFrames() starts from a clean state. Call before each recording.
     void resetRxStream();
 
+    // Full re-initialisation of the I2S master: stops and releases the
+    // peripheral, then configures it again from scratch (clock, frame sync,
+    // GPIOs and L/R select). A recording that starts with a wedged/stale
+    // FIFO from the menu idle state is recovered by this - use it before
+    // every capture.
+    void resetI2s(uint32_t sampleRateHz, bool selectLeftChannel,
+                  bool driveLrSelectGpio);
+
     uint32_t sampleRateHz() const { return sampleRateHz_; }
 
 private:

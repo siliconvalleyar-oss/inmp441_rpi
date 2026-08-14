@@ -70,4 +70,28 @@ void Inmp441_t::resetRxStream() {
     controller_.resetRx();
 }
 
+void Inmp441_t::resetI2s(uint32_t sampleRateHz, bool selectLeftChannel,
+                         bool driveLrSelectGpio) {
+    if (!initialized_) {
+        return;
+    }
+    core::Logger::instance().info(
+        "re-initialising I2S master before capture (fresh mic setup)...");
+    // Full power-cycle-equivalent of the peripheral: disable clock/RX, restore
+    // GPIOs, then re-route, re-clock and re-enable from scratch.
+    controller_.shutdown();
+    if (!controller_.init(sampleRateHz, selectLeftChannel, driveLrSelectGpio)) {
+        initialized_ = false;
+        return;
+    }
+    sampleRateHz_ = sampleRateHz;
+
+    // Drain any stale FIFO contents so the first frame read is frame-aligned.
+    uint32_t discard[8];
+    controller_.readRaw(discard, 8);
+
+    core::Logger::instance().info("INMP441 re-initialised: rate=%u Hz, 24-bit I2S",
+                                  sampleRateHz_);
+}
+
 }  // namespace INMP441
