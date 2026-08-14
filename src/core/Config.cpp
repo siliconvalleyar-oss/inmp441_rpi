@@ -91,6 +91,9 @@ bool loadConfig(Config& config, const std::string& path) {
         config.hpfHz = clampHpfHz(j.value("hpf_hz", config.hpfHz));
         config.lpfHz = clampLpfHz(j.value("lpf_hz", config.lpfHz));
         config.dropoutThresholdSeconds = j.value("dropout_seconds", config.dropoutThresholdSeconds);
+        config.maxSilentRetries = j.value("max_retries", config.maxSilentRetries);
+        config.silentRetryFraction =
+            j.value("retry_silence_fraction", config.silentRetryFraction);
         config.meterIntervalMs = j.value("meter_interval_ms", config.meterIntervalMs);
         config.recordMp3 = (j.value("format", std::string("wav")) == "mp3");
         config.btMac = j.value("bt_mac", config.btMac);
@@ -116,6 +119,8 @@ bool saveConfig(const Config& config, const std::string& path) {
     j["hpf_hz"] = config.hpfHz;
     j["lpf_hz"] = config.lpfHz;
     j["dropout_seconds"] = config.dropoutThresholdSeconds;
+    j["max_retries"] = config.maxSilentRetries;
+    j["retry_silence_fraction"] = config.silentRetryFraction;
     j["meter_interval_ms"] = config.meterIntervalMs;
     j["format"] = config.recordMp3 ? "mp3" : "wav";
     j["bt_mac"] = config.btMac;
@@ -206,6 +211,28 @@ Config parseArgs(int argc, char* argv[], const Config& base) {
                 !parseDouble(args[i + 1].c_str(), &config.dropoutThresholdSeconds)) {
                 config.valid = false;
                 config.error = "--dropout requires a numeric value (seconds)";
+                return config;
+            }
+            ++i;
+        } else if (arg == "--retries") {
+            uint32_t retries = 0;
+            if (i + 1 >= args.size() || !parseUint32(args[i + 1].c_str(), &retries)) {
+                config.valid = false;
+                config.error = "--retries requires a numeric value (count)";
+                return config;
+            }
+            config.maxSilentRetries = static_cast<int>(retries);
+            ++i;
+        } else if (arg == "--retry-silence-fraction") {
+            if (i + 1 >= args.size() ||
+                !parseDouble(args[i + 1].c_str(), &config.silentRetryFraction)) {
+                config.valid = false;
+                config.error = "--retry-silence-fraction requires a numeric value (0..1)";
+                return config;
+            }
+            if (config.silentRetryFraction < 0.0 || config.silentRetryFraction > 1.0) {
+                config.valid = false;
+                config.error = "--retry-silence-fraction out of range (0..1)";
                 return config;
             }
             ++i;
@@ -373,6 +400,12 @@ void printUsage() {
         "      --dropout <sec>      Flag runs of digital silence longer than this\n"
         "                          (default 1 s) as mic dropouts in the recording\n"
         "                          summary (diagnosis of flaky wiring/capsule)\n"
+        "      --retries <n>        Auto re-record a take that is mostly digital\n"
+        "                          silence (the INMP441 wakes up after a few\n"
+        "                          seconds), up to n times (default 2; 0 disables)\n"
+        "      --retry-silence-fraction <f>\n"
+        "                          Retry when this fraction (0..1) of the take is\n"
+        "                          silence (default 0.30 = 30%%)\n"
         "  -c, --channel <lr>      Mic channel and I2S slot to read:\n"
         "                          'left' (L/R pin -> GND) or 'right' (L/R pin\n"
         "                          -> +3V3). Also drives GPIO21 to match.\n"

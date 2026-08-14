@@ -32,6 +32,8 @@ struct Config {
     double hpfHz = 30.0;             // high-pass cutoff before gain (Hz); 0 = off
     double lpfHz = 0.0;              // low-pass cutoff after HPF (Hz); 0 = off
     double dropoutThresholdSeconds = 1.0;  // min digital-silence run to flag
+    int maxSilentRetries = 2;              // auto re-record takes mostly digital silence
+    double silentRetryFraction = 0.30;     // retry when this fraction of a take is silence
     bool verbose = false;
     uint32_t dumpWordCount = 16;     // words printed by --dump
     double meterIntervalMs = 120.0;  // refresh period of the level meter

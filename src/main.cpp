@@ -161,104 +161,16 @@ int runLevelMeter(Inmp441_t& mic, const Config& config) {    Logger& log = Logge
 bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& path) {
     Logger& log = Logger::instance();
 
-    audio::WaveWriter writer(path, config.sampleRate, config.recordStereo);
-    if (!writer.open()) {
-        return false;
-    }
-
-    // Entre grabaciones (con el mic siguiendo clockeado pero sin nadie
-    // leyendo el FIFO) el RX puede desbordarse y quedarse en un estado
-    // estale; reiniciar por completo el maestro I2S garantiza que cada
-    // grabacion arranque con el microfono reconfigurado y un FIFO limpio.
-    mic.resetI2s(config.sampleRate, config.selectLeftChannel,
-                 config.driveLrSelectGpio);
-
-    std::vector<audio::AudioFrame> frames(kChunkFrames);
-    std::vector<int16_t> interleaved(kChunkFrames * (config.recordStereo ? 2 : 1));
-
-    auto start = std::chrono::steady_clock::now();
-    const auto duration = std::chrono::duration<double>(config.durationSeconds);
-
-    // Discard the I2S startup transient AND wait until the mic actually
-    // produces audio. The INMP441 (and its power rail) can take many seconds
-    // to wake after the clock starts; if we began recording immediately the
-    // first take would be digital silence. The warm-up ends once
-    // `warmupSeconds` of live (non-zero) audio have been discarded, or after
-    // a hard cap so a truly dead mic does not block the app forever.
-    if (config.warmupSeconds > 0.0) {
-        const auto warmupBudget = std::chrono::duration<double>(config.warmupSeconds);
-        const auto maxWarmup = std::chrono::duration<double>(kMaxWarmupSeconds);
-        const auto warmupStart = std::chrono::steady_clock::now();
-        log.info("warming up %.1f s (waiting for live audio from the mic, "
-                 "hard cap %.0f s)...", config.warmupSeconds, kMaxWarmupSeconds);
-        double aliveSeconds = 0.0;
-        auto lastCheck = std::chrono::steady_clock::now();
-        while (!core::SignalHandler::shouldStop()) {
-            const size_t n = mic.readFrames(frames.data(), frames.size());
-            if (n == 0) {
-                continue;
-            }
-            const auto now = std::chrono::steady_clock::now();
-            const double dt =
-                std::chrono::duration<double>(now - lastCheck).count();
-            lastCheck = now;
-            bool anyAlive = false;
-            for (size_t i = 0; i < n; ++i) {
-                if (frames[i].left24 != 0 || frames[i].right24 != 0) {
-                    anyAlive = true;
-                    break;
-                }
-            }
-            if (anyAlive) {
-                aliveSeconds += dt;
-            }
-            if (aliveSeconds >= warmupBudget.count() ||
-                now - warmupStart >= maxWarmup) {
-                break;
-            }
-        }
-        log.info("warm-up done (%.1f s of live audio discarded)",
-                 aliveSeconds);
-        start = std::chrono::steady_clock::now();
-    }
-
-    log.info("recording %u frames (%u Hz, %s) to '%s'",
-             static_cast<uint32_t>(config.sampleRate * config.durationSeconds),
-             config.sampleRate,
-             config.recordStereo
-                 ? "stereo 16-bit"
-                 : (config.selectLeftChannel ? "mono 16-bit (left)" : "mono 16-bit (right)"),
-             path.c_str());
-
-    bool failed = false;
+    const size_t totalFrames =
+        static_cast<size_t>(config.sampleRate * config.durationSeconds);
+    const size_t retryThresholdFrames =
+        static_cast<size_t>(totalFrames * config.silentRetryFraction);
 
     // Digital gain (dB -> linear). Applied in the 24-bit/float domain and the
     // final quantization to 16-bit happens once, at the very end, so the gain
     // does NOT amplify the 16-bit quantization noise of an early truncation.
     const double gain =
         (config.gainDb == 0.0) ? 1.0 : std::pow(10.0, config.gainDb / 20.0);
-
-    // Adjustable one-pole high-pass filter (default 30 Hz, 0 = off). Removes
-    // the INMP441's DC offset and the sub-bass hum of the power rail BEFORE
-    // the digital gain: at high gain those constants would be amplified into
-    // a huge excursion that saturates (clips) the recording - the harsh
-    // "noise" heard at high gain settings. Unlike the old fixed DC blocker,
-    // the filter also runs when no gain is applied (hpf_hz > 0).
-    // Per-channel state: in stereo, L and R must not share one filter memory
-    // (that would cross-couple the two slots).
-    audio::HighPassFilter hpfLeft;
-    audio::HighPassFilter hpfRight;
-    hpfLeft.setCutoffHz(config.hpfHz, config.sampleRate);
-    hpfRight.setCutoffHz(config.hpfHz, config.sampleRate);
-
-    // Adjustable one-pole low-pass filter (default 0 Hz = off). Attenuates
-    // high-frequency noise and the INMP441's ultrasonic response. Use values
-    // like 8000 or 12000 Hz to reduce hiss. Runs AFTER the HPF so the signal
-    // band is clean before the digital gain is applied.
-    audio::LowPassFilter lpfLeft;
-    audio::LowPassFilter lpfRight;
-    lpfLeft.setCutoffHz(config.lpfHz, config.sampleRate);
-    lpfRight.setCutoffHz(config.lpfHz, config.sampleRate);
 
     // Applies HPF, then LPF (when enabled), then the digital gain - all in the
     // 24-bit/float domain - and quantizes to 16-bit with rounding exactly once,
@@ -294,123 +206,228 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
     // Mic dropout detection: consecutive digital-silence (zero) samples.
     const size_t dropoutThreshold =
         static_cast<size_t>(config.sampleRate * config.dropoutThresholdSeconds);
-    size_t zeroRun = 0;
-    size_t dropoutEvents = 0;
-    size_t dropoutFrames = 0;
-    bool inDropout = false;
 
-    // Output samples clamped to full scale (diagnosis aid: --gain too high).
-    size_t clipCount = 0;
+    std::vector<audio::AudioFrame> frames(kChunkFrames);
+    std::vector<int16_t> interleaved(kChunkFrames * (config.recordStereo ? 2 : 1));
 
-    // Optional live VU meter drawn to stderr during the recording.
-    audio::RmsAnalyzer recordMeter;
-    const auto meterInterval =
-        std::chrono::duration<double, std::milli>(config.meterIntervalMs);
-    auto nextMeter = std::chrono::steady_clock::now() + meterInterval;
-
-    while (!core::SignalHandler::shouldStop()) {
-        const auto elapsed = std::chrono::steady_clock::now() - start;
-        if (elapsed >= duration) {
-            break;
+    // The INMP441 (or its power rail) can drop out for seconds at a time.
+    // When a take ends up mostly digital silence the whole capture is retried
+    // (fresh I2S setup + live-audio warm-up again) so a flaky capsule does not
+    // leave a silent recording behind.
+    for (int attempt = 1; ; ++attempt) {
+        audio::WaveWriter writer(path, config.sampleRate, config.recordStereo);
+        if (!writer.open()) {
+            return false;
         }
 
-        const size_t read = mic.readFrames(frames.data(), frames.size());
-        if (read == 0) {
-            continue;
+        // Entre grabaciones (con el mic siguiendo clockeado pero sin nadie
+        // leyendo el FIFO) el RX puede desbordarse y quedarse en un estado
+        // estale; reiniciar por completo el maestro I2S garantiza que cada
+        // grabacion arranque con el microfono reconfigurado y un FIFO limpio.
+        mic.resetI2s(config.sampleRate, config.selectLeftChannel,
+                     config.driveLrSelectGpio);
+
+        // Per-take DSP state: the HPF/LPF memory and the dropout counters must
+        // not leak across attempts.
+        audio::HighPassFilter hpfLeft;
+        audio::HighPassFilter hpfRight;
+        hpfLeft.setCutoffHz(config.hpfHz, config.sampleRate);
+        hpfRight.setCutoffHz(config.hpfHz, config.sampleRate);
+        audio::LowPassFilter lpfLeft;
+        audio::LowPassFilter lpfRight;
+        lpfLeft.setCutoffHz(config.lpfHz, config.sampleRate);
+        lpfRight.setCutoffHz(config.lpfHz, config.sampleRate);
+
+        size_t zeroRun = 0;
+        size_t dropoutEvents = 0;
+        size_t dropoutFrames = 0;
+        bool inDropout = false;
+        // Output samples clamped to full scale (diagnosis aid: --gain too high).
+        size_t clipCount = 0;
+        bool failed = false;
+
+        auto start = std::chrono::steady_clock::now();
+        const auto duration = std::chrono::duration<double>(config.durationSeconds);
+
+        // Discard the I2S startup transient AND wait until the mic actually
+        // produces audio. The INMP441 (and its power rail) can take many seconds
+        // to wake after the clock starts; if we began recording immediately the
+        // first take would be digital silence. The warm-up ends once
+        // `warmupSeconds` of live (non-zero) audio have been discarded, or after
+        // a hard cap so a truly dead mic does not block the app forever.
+        if (config.warmupSeconds > 0.0) {
+            const auto warmupBudget = std::chrono::duration<double>(config.warmupSeconds);
+            const auto maxWarmup = std::chrono::duration<double>(kMaxWarmupSeconds);
+            const auto warmupStart = std::chrono::steady_clock::now();
+            log.info("warming up %.1f s (waiting for live audio from the mic, "
+                     "hard cap %.0f s)...", config.warmupSeconds, kMaxWarmupSeconds);
+            double aliveSeconds = 0.0;
+            auto lastCheck = std::chrono::steady_clock::now();
+            while (!core::SignalHandler::shouldStop()) {
+                const size_t n = mic.readFrames(frames.data(), frames.size());
+                if (n == 0) {
+                    continue;
+                }
+                const auto now = std::chrono::steady_clock::now();
+                const double dt =
+                    std::chrono::duration<double>(now - lastCheck).count();
+                lastCheck = now;
+                bool anyAlive = false;
+                for (size_t i = 0; i < n; ++i) {
+                    if (frames[i].left24 != 0 || frames[i].right24 != 0) {
+                        anyAlive = true;
+                        break;
+                    }
+                }
+                if (anyAlive) {
+                    aliveSeconds += dt;
+                }
+                if (aliveSeconds >= warmupBudget.count() ||
+                    now - warmupStart >= maxWarmup) {
+                    break;
+                }
+            }
+            log.info("warm-up done (%.1f s of live audio discarded)",
+                     aliveSeconds);
+            start = std::chrono::steady_clock::now();
+        }
+
+        log.info("recording %u frames (%u Hz, %s) to '%s'",
+                 static_cast<uint32_t>(config.sampleRate * config.durationSeconds),
+                 config.sampleRate,
+                 config.recordStereo
+                     ? "stereo 16-bit"
+                     : (config.selectLeftChannel ? "mono 16-bit (left)" : "mono 16-bit (right)"),
+                 path.c_str());
+
+        // Optional live VU meter drawn to stderr during the recording.
+        audio::RmsAnalyzer recordMeter;
+        const auto meterInterval =
+            std::chrono::duration<double, std::milli>(config.meterIntervalMs);
+        auto nextMeter = std::chrono::steady_clock::now() + meterInterval;
+
+        while (!core::SignalHandler::shouldStop()) {
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            if (elapsed >= duration) {
+                break;
+            }
+
+            const size_t read = mic.readFrames(frames.data(), frames.size());
+            if (read == 0) {
+                continue;
+            }
+
+            if (config.showRecordMeter) {
+                recordMeter.addFrames(frames.data(), read, config.selectLeftChannel);
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= nextMeter) {
+                    const std::string meter = audio::renderMeter(recordMeter.rmsDb(),
+                                                                 recordMeter.peakDb(), 36);
+                    std::fprintf(stderr, "\r%s  [%g s]", meter.c_str(), config.durationSeconds);
+                    std::fflush(stderr);
+                    recordMeter.reset();
+                    nextMeter = now + meterInterval;
+                }
+            }
+
+            for (size_t i = 0; i < read; ++i) {
+                const int32_t leftSample = frames[i].left24;
+                const int32_t rightSample = frames[i].right24;
+                const int32_t activeSample =
+                    config.selectLeftChannel ? leftSample : rightSample;
+
+                // Dropout detection works on the raw 24-bit value: a real zero slot
+                // is digital silence; quiet audio is still non-zero in 24-bit (it
+                // only rounds to zero after the 16-bit truncation).
+                if (activeSample == 0) {
+                    ++zeroRun;
+                    if (zeroRun >= dropoutThreshold && !inDropout) {
+                        inDropout = true;
+                        ++dropoutEvents;
+                        log.warning("MIC DROPOUT: %g s of digital silence detected",
+                                    config.dropoutThresholdSeconds);
+                    }
+                    if (inDropout) {
+                        ++dropoutFrames;
+                    }
+                } else {
+                    if (inDropout) {
+                        log.warning("mic recovered after %.2f s of silence",
+                                    static_cast<double>(zeroRun) / config.sampleRate);
+                        inDropout = false;
+                    }
+                    zeroRun = 0;
+                }
+
+                if (config.recordStereo) {
+                    interleaved[i * 2] = applyFx(hpfLeft, lpfLeft, leftSample, &clipCount);
+                    interleaved[i * 2 + 1] = applyFx(hpfRight, lpfRight, rightSample, &clipCount);
+                } else {
+                    interleaved[i] = applyFx(hpfLeft, lpfLeft, activeSample, &clipCount);
+                }
+            }
+
+            if (!writer.writeFrames16(interleaved.data(), read)) {
+                failed = true;
+                break;
+            }
         }
 
         if (config.showRecordMeter) {
-            recordMeter.addFrames(frames.data(), read, config.selectLeftChannel);
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= nextMeter) {
-                const std::string meter = audio::renderMeter(recordMeter.rmsDb(),
-                                                             recordMeter.peakDb(), 36);
-                std::fprintf(stderr, "\r%s  [%g s]", meter.c_str(), config.durationSeconds);
-                std::fflush(stderr);
-                recordMeter.reset();
-                nextMeter = now + meterInterval;
-            }
+            std::fprintf(stderr, "\n");
         }
 
-        for (size_t i = 0; i < read; ++i) {
-            const int32_t leftSample = frames[i].left24;
-            const int32_t rightSample = frames[i].right24;
-            const int32_t activeSample =
-                config.selectLeftChannel ? leftSample : rightSample;
-
-            // Dropout detection works on the raw 24-bit value: a real zero slot
-            // is digital silence; quiet audio is still non-zero in 24-bit (it
-            // only rounds to zero after the 16-bit truncation).
-            if (activeSample == 0) {
-                ++zeroRun;
-                if (zeroRun >= dropoutThreshold && !inDropout) {
-                    inDropout = true;
-                    ++dropoutEvents;
-                    log.warning("MIC DROPOUT: %g s of digital silence detected",
-                                config.dropoutThresholdSeconds);
-                }
-                if (inDropout) {
-                    ++dropoutFrames;
-                }
-            } else {
-                if (inDropout) {
-                    log.warning("mic recovered after %.2f s of silence",
-                                static_cast<double>(zeroRun) / config.sampleRate);
-                    inDropout = false;
-                }
-                zeroRun = 0;
-            }
-
-            if (config.recordStereo) {
-                interleaved[i * 2] = applyFx(hpfLeft, lpfLeft, leftSample, &clipCount);
-                interleaved[i * 2 + 1] = applyFx(hpfRight, lpfRight, rightSample, &clipCount);
-            } else {
-                interleaved[i] = applyFx(hpfLeft, lpfLeft, activeSample, &clipCount);
-            }
-        }
-
-        if (!writer.writeFrames16(interleaved.data(), read)) {
+        if (!writer.close()) {
             failed = true;
-            break;
         }
-    }
 
-    if (config.showRecordMeter) {
-        std::fprintf(stderr, "\n");
-    }
+        if (dropoutEvents > 0) {
+            log.warning("AUDIO DROPOUTS: %zu event(s), %.2f s total digital silence in the recording",
+                        dropoutEvents,
+                        static_cast<double>(dropoutFrames) / config.sampleRate);
+        } else {
+            log.info("no mic dropouts detected (digital-silence threshold %.1f s)",
+                     config.dropoutThresholdSeconds);
+        }
 
-    if (!writer.close()) {
-        failed = true;
-    }
+        if (clipCount > 0) {
+            const double clipSeconds =
+                static_cast<double>(clipCount) / config.sampleRate;
+            log.warning("CLIPPING: %zu sample(s) (%.2f s) clamped to full scale - "
+                        "lower --gain (try %+.1f dB) for clean audio",
+                        clipCount, clipSeconds, core::clampGainDb(config.gainDb - 6.0));
+        }
 
-    if (dropoutEvents > 0) {
-        log.warning("AUDIO DROPOUTS: %zu event(s), %.2f s total digital silence in the recording",
-                    dropoutEvents,
-                    static_cast<double>(dropoutFrames) / config.sampleRate);
-    } else {
-        log.info("no mic dropouts detected (digital-silence threshold %.1f s)",
-                 config.dropoutThresholdSeconds);
-    }
+        if (failed) {
+            log.error("recording failed");
+            return false;
+        }
 
-    if (clipCount > 0) {
-        const double clipSeconds =
-            static_cast<double>(clipCount) / config.sampleRate;
-        log.warning("CLIPPING: %zu sample(s) (%.2f s) clamped to full scale - "
-                    "lower --gain (try %+.1f dB) for clean audio",
-                    clipCount, clipSeconds, core::clampGainDb(config.gainDb - 6.0));
-    }
+        const double silentFraction =
+            (totalFrames > 0) ? static_cast<double>(dropoutFrames) / totalFrames : 0.0;
 
-    if (failed) {
-        log.error("recording failed");
-        return false;
-    }
+        // Accept the take when it is clean enough, or when the retry budget is
+        // exhausted (so a truly dead mic still returns the last take instead of
+        // looping forever).
+        if (dropoutFrames < retryThresholdFrames || attempt > config.maxSilentRetries) {
+            if (attempt > 1) {
+                log.info("take %d accepted after retries (%.0f%% digital silence, "
+                         "threshold %.0f%%)", attempt, 100.0 * silentFraction,
+                         100.0 * config.silentRetryFraction);
+            }
+            log.info("recorded %.1f s, %llu frames (%u bytes) -> %s",
+                     config.durationSeconds,
+                     static_cast<unsigned long long>(writer.framesWritten()),
+                     static_cast<unsigned int>(writer.framesWritten() * (config.recordStereo ? 4U : 2U)),
+                     path.c_str());
+            return true;
+        }
 
-    log.info("recorded %.1f s, %llu frames (%u bytes) -> %s",
-             config.durationSeconds,
-             static_cast<unsigned long long>(writer.framesWritten()),
-             static_cast<unsigned int>(writer.framesWritten() * (config.recordStereo ? 4U : 2U)),
-             path.c_str());
-    return true;
+        log.warning("take had %.0f%% digital silence (>= %.0f%% threshold); "
+                    "re-recording (attempt %d/%d, fresh I2S + live warm-up)...",
+                    100.0 * silentFraction, 100.0 * config.silentRetryFraction,
+                    attempt + 1, config.maxSilentRetries + 1);
+    }
 }
 
 int runRecordMode(Inmp441_t& mic, const Config& config) {
