@@ -65,8 +65,8 @@ std::string defaultOutputName(const char* extension) {
     std::time_t now = std::time(nullptr);
     std::tm tm{};
     localtime_r(&now, &tm);
-    char stamp[16] = {0};
-    std::strftime(stamp, sizeof(stamp), "%Y%m%d%H%M", &tm);
+    char stamp[20] = {0};
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d%H%M%S", &tm);
     return std::string("output/recording_") + stamp + "." + extension;
 }
 
@@ -344,9 +344,9 @@ void printUsage() {
         "                          (Bluetooth A2DP via bluetoothctl + PulseAudio)\n"
         "  --level                 Live RMS/peak meter\n"
         "  --wav [file.wav]        Record audio to a 16-bit PCM WAV file\n"
-        "                          (default: output/recording_YYYYMMDDHHMM.wav)\n"
+        "                          (default: output/recording_YYYYMMDDHHMMSS.wav)\n"
         "  --mp3 [file.mp3]        Record to a temp WAV then encode to MP3\n"
-        "                          with lame (default: output/recording_YYYYMMDDHHMM.mp3)\n"
+        "                          with lame (default: output/recording_YYYYMMDDHHMMSS.mp3)\n"
         "  --dump [count]          Dump N raw 32-bit I2S words and exit (debug)\n"
         "  --info                  Print hardware/configuration info and exit\n"
         "\n"
