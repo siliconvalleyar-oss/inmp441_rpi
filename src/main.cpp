@@ -66,6 +66,10 @@ const char* appVersion() {
 // Level test duration used by the interactive menu.
 constexpr double kMenuMeterSeconds = 5.0;
 
+// Hard cap for the pre-recording warm-up: the INMP441 can take a long time to
+// wake up (power rail / internal sync), but a dead mic must not block the app.
+constexpr double kMaxWarmupSeconds = 30.0;
+
 // Creates the parent directory (or directories) of an output path.
 bool ensureParentDirectory(const std::string& outputPath) {
     const size_t pos = outputPath.find_last_of('/');
@@ -175,19 +179,46 @@ bool recordWavToFile(Inmp441_t& mic, const Config& config, const std::string& pa
     auto start = std::chrono::steady_clock::now();
     const auto duration = std::chrono::duration<double>(config.durationSeconds);
 
-    // Discard the I2S startup transient (the mic's internal HPF settles over
-    // a few seconds) so recordings start clean.
+    // Discard the I2S startup transient AND wait until the mic actually
+    // produces audio. The INMP441 (and its power rail) can take many seconds
+    // to wake after the clock starts; if we began recording immediately the
+    // first take would be digital silence. The warm-up ends once
+    // `warmupSeconds` of live (non-zero) audio have been discarded, or after
+    // a hard cap so a truly dead mic does not block the app forever.
     if (config.warmupSeconds > 0.0) {
-        const auto warmupLimit = std::chrono::duration<double>(config.warmupSeconds);
-        log.info("warming up %.1f s (discarding startup transient)...",
-                 config.warmupSeconds);
-        while (std::chrono::steady_clock::now() - start < warmupLimit &&
-               !core::SignalHandler::shouldStop()) {
-            if (mic.readFrames(frames.data(), frames.size()) == 0) {
+        const auto warmupBudget = std::chrono::duration<double>(config.warmupSeconds);
+        const auto maxWarmup = std::chrono::duration<double>(kMaxWarmupSeconds);
+        const auto warmupStart = std::chrono::steady_clock::now();
+        log.info("warming up %.1f s (waiting for live audio from the mic, "
+                 "hard cap %.0f s)...", config.warmupSeconds, kMaxWarmupSeconds);
+        double aliveSeconds = 0.0;
+        auto lastCheck = std::chrono::steady_clock::now();
+        while (!core::SignalHandler::shouldStop()) {
+            const size_t n = mic.readFrames(frames.data(), frames.size());
+            if (n == 0) {
                 continue;
             }
+            const auto now = std::chrono::steady_clock::now();
+            const double dt =
+                std::chrono::duration<double>(now - lastCheck).count();
+            lastCheck = now;
+            bool anyAlive = false;
+            for (size_t i = 0; i < n; ++i) {
+                if (frames[i].left24 != 0 || frames[i].right24 != 0) {
+                    anyAlive = true;
+                    break;
+                }
+            }
+            if (anyAlive) {
+                aliveSeconds += dt;
+            }
+            if (aliveSeconds >= warmupBudget.count() ||
+                now - warmupStart >= maxWarmup) {
+                break;
+            }
         }
-        log.info("warm-up done");
+        log.info("warm-up done (%.1f s of live audio discarded)",
+                 aliveSeconds);
         start = std::chrono::steady_clock::now();
     }
 
