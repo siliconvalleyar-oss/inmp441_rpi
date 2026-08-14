@@ -58,8 +58,9 @@ public:
 
     // Limpia el soft-block rfkill del Bluetooth (sysfs). Lo usa connect()
     // para que el adaptador pueda encenderse incluso si systemd-rfkill o
-    // algún servicio lo volvió a bloquear tras el arranque.
-    void unblockRfkill();
+    // algún servicio lo volvió a bloquear tras el arranque. Es estática
+    // para poder llamarla también antes de bajar privilegios a PulseAudio.
+    static void unblockRfkill();
 
     // Comprueba si el dispositivo está conectado (perfil A2DP).
     bool isConnected(const std::string& mac);

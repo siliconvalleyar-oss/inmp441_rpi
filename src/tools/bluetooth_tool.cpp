@@ -228,8 +228,8 @@ bool BluetoothTool::disconnect(const std::string& mac) {
 }
 
 void BluetoothTool::unblockRfkill() {
-    // sysfs es escribible solo por root; en ejecución sin sudo no se puede
-    // (el servicio unblock-bluetooth.service del arranque ya lo desbloquea).
+    // sysfs escribible solo por root; sin sudo (y tras dropToPulseUser)
+    // no se puede, por eso se llama antes de bajar privilegios.
     if (::geteuid() != 0) {
         return;
     }
