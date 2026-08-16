@@ -1,0 +1,13 @@
+# Artefactos de compilación
+bin/
+obj/
+*.o
+*.d
+
+# Grabaciones generadas por el programa
+output/
+
+# Utilidades de editor / sistema
+*.swp
+*~
+.DS_Store
