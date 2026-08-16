@@ -3,14 +3,22 @@
 // Usa el codec genérico "dmic-codec" (snd-soc-dmic), el driver estándar del
 // kernel para micrófonos MEMS digitales, en lugar del dummy "google,voicehat"
 // (que requería un GPIO de sdmode del HAT de amplificador y expone captura y
-// reproducción que aquí no se usan). La CPU I2S actúa como MASTER del reloj
-// (bitclock/frame-master = CPU), igual que la variante "master" del proyecto
-// de referencia admp441-rpi. El overlay original deja la CPU como esclava y
-// el codec dummy no genera reloj -> el bus nunca se activa y ALSA graba
-// silencio. Con la CPU como master, BCLK (GPIO18) y WS (GPIO19) se generan y
-// el INMP441 (esclavo) entrega datos por GPIO20.
+// reproducción que aquí no se usan).
 //
-// Formato I2S, TDM 2 slots x 32 bits (lo mismo que lee el driver nativo).
+// Estructura idéntica a la probada-funcional de trackIT-Systems/snd-i2s_rpi
+// (i2s-soundcard.dts, driver del Adafruit I2S MEMS mic) y a
+// Virgil-Zu/snd-soc-inmp441: simple-audio-card con format=i2s y SIN
+// bitclock/frame-master (el default es la CPU como master del reloj) y SIN
+// dai-tdm-slot-num/width. Con la CPU como master, BCLK (GPIO18) y WS (GPIO19)
+// se generan y el INMP441 (esclavo) entrega datos por GPIO20.
+//
+// IMPORTANTE: no añadir aquí dai-tdm-slot-num/width ni num-channels. La
+// variante con TDM 2 slots x 32 bits + num-channels=<2> producía un BCLK
+// erróneo (captura a ~3.5 kHz en vez de 48 kHz -> grabaciones silenciosas y
+// más cortas de lo pedido); la estructura mínima de este archivo es la que el
+// driver bcm2835-i2s clokea correctamente.
+//
+// Formato I2S, 2 slots x 32 bits (S32_LE, 24 bits útiles alineados al MSB).
 //
 // Instalación:
 //   dtc -@ -I dts -O dtb -o inmp441-bare.dtbo inmp441-bare.dts
@@ -35,7 +43,6 @@
 			mic_codec: dmic-codec {
 				#sound-dai-cells = <0>;
 				compatible = "dmic-codec";
-				num-channels = <2>;
 				status = "okay";
 			};
 		};
@@ -50,13 +57,8 @@
 			simple-audio-card,name = "inmp441-bare";
 			simple-audio-card,format = "i2s";
 
-			simple-audio-card,bitclock-master = <&dailink0_master>;
-			simple-audio-card,frame-master = <&dailink0_master>;
-
-			dailink0_master: simple-audio-card,cpu {
+			simple-audio-card,cpu {
 				sound-dai = <&i2s_clk_producer>;
-				dai-tdm-slot-num = <2>;
-				dai-tdm-slot-width = <32>;
 			};
 
 			simple-audio-card,codec {
