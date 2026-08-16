@@ -132,7 +132,9 @@ bool ParseArgs(int argc, char** argv, AppOptions* opts) {
 // "default"), intenta encontrar la tarjeta del INMP441 por nombre en vez
 // de depender de un dispositivo ALSA "default" que en Raspberry Pi OS no
 // siempre está definido para overlays custom como inmp441-bare.
-std::string ResolveAlsaDevice(const std::string& requested_device) {
+// Solo se usa para CAPTURA: la reproducción pasa por "default"->PulseAudio
+// para salir por el sink por defecto (p.ej. el parlante Bluetooth).
+std::string ResolveCaptureDevice(const std::string& requested_device) {
     if (requested_device != "default") return requested_device;
 
     if (auto found = i2c_audio::FindAlsaDeviceByName("bare")) {
@@ -182,7 +184,7 @@ std::string RunRecording(const AppOptions& opts) {
                << " (GPIO" << opts.lr_gpio << ")\n";
 
     i2c_audio::CaptureConfig cap_cfg;
-    cap_cfg.device_name = ResolveAlsaDevice(opts.alsa_device);
+    cap_cfg.device_name = ResolveCaptureDevice(opts.alsa_device);
     cap_cfg.sample_rate = opts.sample_rate;
     // La captura siempre es S32_LE (el INMP441 entrega 24 bits útiles dentro
     // de slots de 32 bits, alineados a MSB); la conversión al ancho de salida
@@ -290,11 +292,17 @@ bool PlayFile(const std::string& filename, const std::string& device) {
         return false;
     }
 
-    const std::string resolved_device = ResolveAlsaDevice(device);
-    i2c_audio::AlsaPlayback playback(resolved_device);
+    // La reproducción usa el dispositivo tal cual: "default" va por
+    // ALSA->PulseAudio (sink por defecto, p.ej. parlante Bluetooth) y NO se
+    // re-encamina a la tarjeta I2S (que es solo para captura del micrófono).
+    const std::string& playback_device = device;
+    std::cout << "Dispositivo de reproducción: " << playback_device << "\n";
+    i2c_audio::AlsaPlayback playback(playback_device);
     if (!playback.Open(wav)) {
         std::cerr << "No se pudo abrir el dispositivo de reproducción '"
-                   << resolved_device << "'.\n";
+                   << playback_device << "'.\n"
+                   << "Para salir por Bluetooth: conectá el parlante y fijalo "
+                      "como sink por defecto (./fix_bluetooth.sh).\n";
         return false;
     }
 
@@ -321,7 +329,9 @@ void RunMenu(AppOptions opts) {
     while (true) {
         std::cout << "\n=== Grabador INMP441 ===\n"
                    << "Dispositivo ALSA actual: " << opts.alsa_device
-                   << (opts.alsa_device == "default" ? " (se auto-detecta al usarlo)" : "")
+                   << (opts.alsa_device == "default"
+                           ? " (captura: I2S auto-detectada; reproducción: PulseAudio)"
+                           : "")
                    << "\n"
                    << "1) Grabar nuevo audio\n"
                    << "2) Reproducir una grabación\n"
