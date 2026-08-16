@@ -3,13 +3,14 @@
 ## 1. Visión general
 
 `inmp441_rpi` lee audio de un micrófono **TDK InvenSense INMP441** (MEMS I2S, 24-bit)
-directamente desde userspace sobre el periférico **PCM/I2S** del BCM2835, usando la
-librería `bcm2835`. No requiere ALSA ni kernel modules.
+a través de **ALSA**, con el driver I2S del kernel expuesto por el overlay
+`dtoverlay=inmp441-bare`. La línea L/R select (GPIO21) se controla con **libgpiod**
+(sin root). `bcm2835` se sigue usando, pero solo para el display **OLED** (SSD1306).
 
 - **Lenguaje:** C++17
 - **Target:** Raspberry Pi Zero 2 W (BCM2835/BCM2710), funciona en 32-bit y 64-bit
 - **Build system:** Makefile plano, sin cmake
-- **Dependencias externas:** solo `bcm2835`, `libmpg123`, `libao`, `lame`
+- **Dependencias externas:** libasound2-dev + libgpiod-dev (pkg-config), bcm2835 (OLED), libmpg123, libao, lame
 - **Licencia:** MIT
 
 ## 2. Hardware y wiring
@@ -19,13 +20,14 @@ librería `bcm2835`. No requiere ALSA ni kernel modules.
 | VDD | 3.3 V | Alimentación | |
 | GND | GND | Tierra | |
 | SD (PCM_DIN) | GPIO 20 | Datos I2S | |
-| SCK / BCLK | GPIO 18 | Bit clock | ALT0 |
-| WS / LRCK | GPIO 19 | Word select | ALT0 |
-| L/R | GPIO 21 | Selector de canal | LOW = left (default) |
+| SCK / BCLK | GPIO 18 | Bit clock | overlay inmp441-bare |
+| WS / LRCK | GPIO 19 | Word select | overlay inmp441-bare |
+| L/R | GPIO 21 | Selector de canal | libgpiod; LOW = left (default) |
 
-**Regla crítica:** no debe haber ningún overlay I2S activo en `/boot/config.txt`
-(`dtoverlay=googlevoicehat-soundcard`, `i2s-mems-mic`, etc.). El driver
-userspace posee exclusivamente el periférico PCM y su clock.
+**Regla crítica:** el overlay I2S **debe** estar activo en `/boot/config.txt`:
+`dtoverlay=inmp441-bare` (compilado desde `overlays/inmp441-bare.dts`). No debe
+haber OTROS overlays I2S (`googlevoicehat-soundcard`, `i2s-mems-mic`, etc.) que
+peleen por el mismo periférico. El kernel es quien posee el periférico PCM/I2S.
 
 ## 3. Arquitectura de código
 
@@ -33,11 +35,11 @@ userspace posee exclusivamente el periférico PCM y su clock.
 src/
   main.cpp                          # CLI, menú interactivo, modos
   audio/
-    I2SController.cpp/hpp           # Driver BCM2835 PCM/I2S (registros)
-    INMP441.cpp/hpp                 # Capa micrófono, 24-bit alignment
+    AlsaDeviceFinder.cpp/hpp        # Auto-detección tarjeta ALSA "bare"
+    INMP441.cpp/hpp                 # Capa micrófono sobre ALSA, 24-bit alignment
     AudioProcessor.cpp/hpp          # RMS, WAV writer, meter ASCII
   core/
-    Config.cpp/hpp                  # Parsing CLI + JSON persistido
+    Config.cpp/hpp                  # Parsing CLI + JSON persistido (--alsa-device/--gpio-chip)
     Logger.cpp/hpp                  # Logging a stderr (thread-safe)
     SignalHandler.cpp/hpp           # Ctrl+C / SIGTERM cooperativo
   oled/
@@ -52,7 +54,7 @@ src/
 ### Flujo de datos
 
 ```
-INMP441 (24-bit I2S) → I2SController (raw 32-bit slots)
+INMP441 (24-bit I2S) → ALSA / kernel I2S driver (S32_LE, raw 32-bit slots)
     → INMP441::readFrames() → AudioFrame { left24, right24 }
     → AudioProcessor / recordWavToFile():
         1. rawToSample24() (>> 8 aritmético)
@@ -95,6 +97,9 @@ Archivo por defecto: `config.json` (gitignored).
 ```
 
 - CLI siempre sobrescribe el archivo.
+- `--alsa-device <dev>` (default "default" = auto-detecta la tarjeta "bare";
+  alternativas `plughw:<card>,0`) y `--gpio-chip <chip>` (default gpiochip0)
+  son solo CLI, no se persisten en el JSON.
 - El menú guarda automáticamente en cada cambio.
 - `--save-config` persiste los flags CLI al archivo.
 
@@ -197,7 +202,7 @@ test: ...
 # En la Pi
 sudo bash scripts/install_dependencies.sh
 make clean && make -j4
-sudo ./bin/inmp441_rpi --info
+./bin/inmp441_rpi --info
 
 # Tests (sin hardware)
 make test
@@ -210,10 +215,11 @@ bash scripts/cross_build.sh
 Dependencias instaladas por el script:
 - `build-essential`, `git`, `wget`, `curl`
 - `nlohmann-json3-dev` (config JSON)
+- `libasound2-dev`, `libgpiod-dev`, `pkg-config` (captura ALSA + L/R select; sin root)
 - `libmpg123-dev`, `libao-dev` (playback)
 - `lame` (encoding MP3)
 - `bluez`, `pulseaudio`, `pulseaudio-module-bluetooth`, `pulseaudio-utils`
-- `bcm2835` v1.71 (userspace I2S)
+- `bcm2835` v1.71 (solo para el display OLED)
 
 ## 10. Bluetooth / Player
 
@@ -242,7 +248,7 @@ inmp441_rpi/
 │   │   └── SignalHandler.hpp
 │   ├── audio/
 │   │   ├── SampleFormat.hpp
-│   │   ├── I2SController.hpp
+│   │   ├── AlsaDeviceFinder.hpp
 │   │   ├── INMP441.hpp
 │   │   └── AudioProcessor.hpp
 │   ├── oled/
@@ -260,7 +266,6 @@ inmp441_rpi/
 │   ├── README.md
 │   ├── hardware_setup.md
 │   ├── architecture.md
-│   ├── i2s_registers.md
 │   ├── build_and_install.md
 │   ├── usage.md
 │   ├── testing.md
@@ -280,12 +285,12 @@ inmp441_rpi/
 
 | Concepto | Detalle |
 |---|---|
-| Registro PCM base | `0x203000` dentro del bloque de periféricos |
-| Clock manager | `0x101098` (CTL), `0x10109C` (DIV) |
-| Oscilador | 19.2 MHz (Pi legacy), 54 MHz (Pi 4/5/CM4) |
-| BCLK = sample_rate × 64 | Divider = osc / BCLK |
+| Overlay I2S | `dtoverlay=inmp441-bare` (driver del kernel, dmic-codec) |
+| Dispositivo ALSA | `plughw:<card>,0`, tarjeta detectada por nombre "bare" |
+| Formato ALSA | S32_LE, 2 canales, ~48 kHz (24 bits MSB-alineados) |
+| L/R select | libgpiod, gpiochip0 línea 21; LOW = left, HIGH = right |
+| Root | No requerido para grabar; solo para OLED (bcm2835, /dev/mem) |
 | Sample alignment | 24-bit en bits 31-8 del slot → `raw >> 8` |
-| GPIO ALT0 | GPIO 18, 19, 20 para PCM_CLK, PCM_FS, PCM_DIN |
 | HPF one-pole | `y[n] = x[n] - x[n-1] + R*y[n-1]`, R = `1 - 2*pi*fc/fs` |
 | Dropout | N muestras consecutivas en cero → evento reportado |
 | Tags | Inmutables; no se eliminan ni reemplazan |
@@ -302,8 +307,8 @@ inmp441_rpi/
 | Error | Causa | Solución |
 |---|---|---|
 | `403 Permission denied` en push | Credenciales sin permisos | Usar token con `repo` scope en config global |
-| `RX FIFO timeout` | BCLK/WS no llegan al mic | Revisar wiring GPIO 18/19/20 |
-| Señal quieta o half-scale | Alineación de muestras | Corroborar `--dump`, ajustar `CHxPOS` si es necesario |
+| No hay datos (silencio/xrun ALSA) | Overlay no cargado o BCLK/WS no llegan al mic | Verificar `dtoverlay=inmp441-bare` y wiring GPIO 18/19/20 |
+| Señal quieta o half-scale | Alineación de muestras | Corroborar `--dump`; ajustar data-delay en `overlays/inmp441-bare.dts` |
 | L/R invertido | Pin L/R con lógica opuesta | Cambiar `--channel` o cableado |
 | Ruido constante | L/R flotando | Hard-wire a GND (left) o 3V3 (right) |
 | Segfault en menú (cross build) | ABI incompatible GCC 13 vs libstdc++ 6 | Usar GCC 10 para cross-compilar |

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# run.sh - runs the binary with sudo (bcm2835 needs /dev/mem access).
+# run.sh - runs the binary. Recording needs no root (ALSA + libgpiod); use
+# sudo only when you need the OLED display in the menu/player screens.
 #
 # Usage:
 #   bash scripts/run.sh                # interactive menu (default)
@@ -17,4 +18,4 @@ if [[ ! -x "${BINARY}" ]]; then
     make -C "${ROOT_DIR}" all
 fi
 
-exec sudo "${BINARY}" "$@"
+exec "${BINARY}" "$@"

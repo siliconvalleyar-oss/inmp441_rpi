@@ -10,14 +10,14 @@ inmp441_rpi/
 ├── LICENSE
 ├── include/                  # public headers (*.hpp)
 │   ├── core/
-│   │   ├── Config.hpp        # command-line parsing results
+│   │   ├── Config.hpp        # CLI parsing/validation (incl. --alsa-device/--gpio-chip)
 │   │   ├── Logger.hpp        # thread-safe stderr logger
 │   │   └── SignalHandler.hpp # Ctrl+C / SIGTERM handling
 │   └── audio/
-│       ├── SampleFormat.hpp  # pure 24-bit <-> 16-bit / float conversions
-│       ├── I2SController.hpp # BCM2835 PCM/I2S peripheral driver
-│       ├── INMP441.hpp       # microphone layer over the I2S transport
-│       └── AudioProcessor.hpp# RMS analysis, WAV writer, meter rendering
+│       ├── SampleFormat.hpp    # pure 24-bit <-> 16-bit / float conversions
+│       ├── AlsaDeviceFinder.hpp# ALSA card lookup by name ("bare" overlay)
+│       ├── INMP441.hpp         # microphone layer over ALSA (kernel I2S)
+│       └── AudioProcessor.hpp  # RMS analysis, WAV writer, meter rendering
 ├── src/                      # implementation, one .cpp per header
 │   ├── main.cpp
 │   ├── core/
@@ -43,16 +43,18 @@ inmp441_rpi/
               └───────┬────────┘   └──────┬──────┘   └─────┬───────┘
                       │                   │                │
                       └───────────────────▼────────────────┘
-                                 ┌─────────────────┐
+                                 ┌──────────────────┐
                                  │INMP441::Inmp441_t│  RAII handle, 24-bit AudioFrame
-                                 └───────┬─────────┘
-                                         │ raw 32-bit slots
-                                 ┌───────▼───────┐
-                                 │I2SController  │  PCM/I2S + CM clock,
-                                 │ (bcm2835)     │  GPIO 18/19/20/21
-                                 └───────┬───────┘
+                                 └───────┬──────────┘
+                                         │ raw 32-bit slots (S32_LE)
+                                 ┌───────▼──────────┐
+                                 │   ALSA capture   │  snd_pcm_open on plughw:<card>,0
+                                 │ (kernel I2S drv, │  (auto-detected "bare" card);
+                                 │ dtoverlay=inmp-  │  libgpiod drives the L/R
+                                 │ 441-bare)        │  select line (GPIO21)
+                                 └───────┬──────────┘
                                          ▼
-                          BCM2835 PCM/I2S peripheral (register access)
+                          Raspberry Pi I2S peripheral (kernel driver)
                           ┌─────────────────────────────────────────┐
                           │ BCLK (GPIO18)   WS (GPIO19)  SD (GPIO20)│
                           └─────────────────────────────────────────┘
@@ -64,19 +66,27 @@ inmp441_rpi/
 
 ### Layers
 
-1. **I2SController** — owns the BCM2835 PCM/I2S peripheral: configures the GPIO
-   pin functions (ALT0), the PCM clock generator (`CM_PCMCTL` / `CM_PCMDIV`),
-   the I2S master frame (MODE/RXC/TXC) and the RX FIFO access (`CS`/`FIFO`).
-   Exposes raw 32-bit slots. See [i2s_registers.md](i2s_registers.md).
+1. **ALSA / kernel I2S driver** — the microphone is captured through the
+   `dtoverlay=inmp441-bare` overlay (see `overlays/inmp441-bare.dts`), which
+   exposes a `dmic-codec` sound card named "inmp441-bare". The capture stream
+   is opened with `snd_pcm_open` on `plughw:<card>,0`; the card is
+   auto-detected by name via `audio::FindAlsaDeviceByName`
+   (`AlsaDeviceFinder.hpp` / `src/audio/AlsaDeviceFinder.cpp`, default
+   "default", overridable with `--alsa-device`). The stream is S32_LE, 2
+   channels, ~48 kHz, and the mic's 24 bits arrive MSB-aligned inside each
+   32-bit slot. The L/R select line is driven with libgpiod on `gpiochip0`
+   line 21 (overridable with `--gpio-chip`); LOW = left, HIGH = right.
 
 2. **INMP441::Inmp441_t** — the microphone domain, and an RAII handle: the
-   constructor opens the I2S master and throws `std::runtime_error` on
-   failure; the destructor shuts the hardware down, so owning it via
-   `std::make_unique` releases everything at scope exit. Knows that the mic
-   delivers 24-bit two's-complement data left-justified in 32-bit slots, one
-   bit after the frame-sync edge (standard I2S). It converts raw slots into
-   `AudioFrame { left24, right24 }` (see `SampleFormat.hpp`) and drives the
-   L/R select line.
+   constructor opens the ALSA capture device (and selects the channel via the
+   libgpiod L/R line) and throws `std::runtime_error` on failure; the
+   destructor closes the PCM stream and releases the GPIO line, so owning it
+   via `std::make_unique` releases everything at scope exit. Knows that the
+   mic delivers 24-bit two's-complement data left-justified in 32-bit slots,
+   one bit after the frame-sync edge (standard I2S). It converts raw slots
+   into `AudioFrame { left24, right24 }` (see `SampleFormat.hpp`) and keeps
+   the same public API: `readFrames()`, `resetRxStream()` (drop + prepare),
+   `resetI2s()` (close and reopen the ALSA stream) and `readRawWords()`.
 
 3. **AudioProcessor** — signal consumers:
    - `RmsAnalyzer` computes RMS / peak in dBFS for the meter.
@@ -85,13 +95,15 @@ inmp441_rpi/
    - `renderMeter` builds the ASCII level bar.
 
 4. **core/** — cross-cutting concerns: `Logger` (stderr, timestamps, levels),
-   `Config` (CLI parsing/validation), `SignalHandler` (cooperative shutdown).
+   `Config` (CLI parsing/validation, incl. `--alsa-device` / `--gpio-chip`),
+   `SignalHandler` (cooperative shutdown).
 
 ## Design decisions
 
-- **Zero external dependencies.** Only the `bcm2835` library plus the C++
-   standard library. No ALSA, no cmake — a plain Makefile keeps the toolchain
-   footprint tiny for a Zero 2 W.
+- **Kernel I2S via ALSA.** Capture goes through the kernel I2S driver
+   (`dtoverlay=inmp441-bare`), resolved at build time with `pkg-config`
+   (`libasound2-dev` + `libgpiod-dev`); `bcm2835` remains only for the OLED
+   display. A plain Makefile keeps the toolchain footprint tiny.
 - **stdout is reserved for data.** All diagnostics go to `stderr`, so
    `--dump` and future raw/PCM modes can be piped safely.
 - **Mirrored object tree.** `obj/` replicates `src/` subdirectories
@@ -99,6 +111,7 @@ inmp441_rpi/
    collision-free.
 - **Pure signal code is host-testable.** `SampleFormat.hpp` has no hardware
    dependencies, so `make test` runs the conversion unit tests on any machine.
-- **Polled RX FIFO.** Reads are synchronous and loss-free at the target rates
-   (up to 48 kHz stereo) on the Zero 2 W's 1 GHz CPU. DMA is a possible future
-   enhancement (see [testing.md](testing.md#future-work)).
+- **ALSA PCM stream.** The kernel driver owns the I2S clocking (BCLK/WS/SD);
+   reads are synchronous through the PCM stream and loss-free at the target
+   rates (up to 48 kHz stereo). DMA/zero-copy is a possible future enhancement
+   (see [testing.md](testing.md#future-work)).

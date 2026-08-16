@@ -190,6 +190,23 @@ Config parseArgs(int argc, char* argv[], const Config& base) {
                 return config;
             }
             config.btMac = args[++i];
+        } else if (arg == "--alsa-device") {
+            if (i + 1 >= args.size() || args[i + 1].empty() ||
+                args[i + 1][0] == '-') {
+                config.valid = false;
+                config.error = "--alsa-device requires a device name "
+                               "(e.g. plughw:1,0, or 'default' to auto-detect)";
+                return config;
+            }
+            config.alsaDevice = args[++i];
+        } else if (arg == "--gpio-chip") {
+            if (i + 1 >= args.size() || args[i + 1].empty() ||
+                args[i + 1][0] == '-') {
+                config.valid = false;
+                config.error = "--gpio-chip requires a chip name (e.g. gpiochip0)";
+                return config;
+            }
+            config.gpioChip = args[++i];
         } else if (arg == "--info") {
             config.mode = RunMode::kInfo;
         } else if (arg == "--duration" || arg == "-d") {
@@ -359,7 +376,9 @@ Config parseArgs(int argc, char* argv[], const Config& base) {
 void printUsage() {
     std::printf(
         "inmp441_rpi - I2S MEMS microphone (INMP441) reader for Raspberry Pi\n"
-        "using the bcm2835 userspace library (raw PCM/I2S peripheral access).\n"
+        "capturing the microphone through ALSA (kernel I2S driver, the\n"
+        "dtoverlay=inmp441-bare overlay); the L/R select line is driven with\n"
+        "libgpiod, so recording does not need root.\n"
         "\n"
         "Usage: inmp441_rpi [options]\n"
         "\n"
@@ -424,6 +443,13 @@ void printUsage() {
         "                          Saved as bt_mac in the config file. No\n"
         "                          auto-detection: audio only plays through\n"
         "                          this device (aborts if not connected).\n"
+        "      --alsa-device <dev> ALSA capture device (default 'default' =\n"
+        "                          auto-detect the first card named 'bare',\n"
+        "                          i.e. the inmp441-bare overlay). Override\n"
+        "                          with plughw:<card>,0 when auto-detection\n"
+        "                          fails or you have several I2S cards.\n"
+        "      --gpio-chip <chip>  libgpiod chip for the L/R select line\n"
+        "                          (default gpiochip0)\n"
         "  -v, --verbose           Verbose (debug) logging\n"
         "  --version               Show version and exit\n"
         "  -h, --help              Show this help\n"
@@ -435,7 +461,9 @@ void printUsage() {
         "  the config file.\n"
         "\n"
         "Notes:\n"
-        "  * Must run as root (the bcm2835 library needs /dev/mem access).\n"
+        "  * Recording (--wav/--mp3/--level) needs no root: ALSA exposes the\n"
+        "    I2S overlay and libgpiod drives GPIO21. Root is only required by\n"
+        "    the OLED display (menu and player screens, bcm2835).\n"
         "  * All log output goes to stderr; stdout stays clean for piping.\n");
 }
 

@@ -11,11 +11,13 @@
 # Installs:
 #   * build essentials (compiler, make) and git/wget/curl
 #   * nlohmann-json3-dev  (config.json persistence)
+#   * libasound2-dev, libgpiod-dev, pkg-config (ALSA capture + GPIO21 L/R)
 #   * libmpg123-dev, libao-dev  (MP3 playback, --player)
 #   * lame               (MP3 encoding, --mp3 mode)
 #   * bluez, pulseaudio, pulseaudio-module-bluetooth, pulseaudio-utils
 #                        (Bluetooth A2DP playback: bluetoothctl + pactl)
-#   * the bcm2835 userspace library (1.71) installed under /usr/local
+#   * the bcm2835 userspace library (1.71) installed under /usr/local,
+#     used ONLY by the OLED display (menu/player screens)
 #   * [x86_64 host only] g++-arm-linux-gnueabihf + armhf multiarch libs for
 #                        scripts/cross_build.sh
 #
@@ -92,7 +94,10 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     curl \
     nlohmann-json3-dev \
     libmpg123-dev \
-    libao-dev
+    libao-dev \
+    libasound2-dev \
+    libgpiod-dev \
+    pkg-config
 
 log "Installing lame (MP3 encoder for --mp3 mode)..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y lame
@@ -121,12 +126,14 @@ case "$ARCH" in
         DEBIAN_FRONTEND=noninteractive apt-get install -y \
             g++-arm-linux-gnueabihf \
             libmpg123-dev:armhf \
-            libao-dev:armhf
+            libao-dev:armhf \
+            libasound2-dev:armhf \
+            libgpiod-dev:armhf
         ;;
 esac
 
 # ---------------------------------------------------------------------------
-# bcm2835 library
+# bcm2835 library (used only by the OLED display)
 # ---------------------------------------------------------------------------
 BCM2835_VERSION="1.71"
 BCM2835_TARBALL="/tmp/bcm2835-${BCM2835_VERSION}.tar.gz"
@@ -164,6 +171,8 @@ fi
 log "Verifying installation..."
 test -f /usr/local/include/bcm2835.h || die "bcm2835.h not found in /usr/local/include"
 test -f /usr/local/lib/libbcm2835.a || die "libbcm2835.a not found in /usr/local/lib"
+test -f /usr/include/alsa/asoundlib.h || die "asoundlib.h not found (libasound2-dev)"
+test -f /usr/include/gpiod.h || die "gpiod.h not found (libgpiod-dev)"
 
 g++ --version >/dev/null 2>&1 || die "g++ not available"
 make --version >/dev/null 2>&1 || die "make not available"
@@ -174,6 +183,12 @@ echo '#include <mpg123.h>' | g++ -E -x c++ - >/dev/null 2>&1 \
     || die "mpg123.h not found (libmpg123-dev)"
 echo '#include <ao/ao.h>' | g++ -E -x c++ - >/dev/null 2>&1 \
     || die "ao/ao.h not found (libao-dev)"
+echo '#include <alsa/asoundlib.h>' | g++ -E -x c++ - >/dev/null 2>&1 \
+    || die "asoundlib.h not found (libasound2-dev)"
+echo '#include <gpiod.h>' | g++ -E -x c++ - >/dev/null 2>&1 \
+    || die "gpiod.h not found (libgpiod-dev)"
+
+pkg-config --exists alsa libgpiod || die "pkg-config cannot find alsa/libgpiod"
 
 command -v lame >/dev/null 2>&1 || warn "lame not found - --mp3 mode will fail"
 command -v bluetoothctl >/dev/null 2>&1 || warn "bluetoothctl not found - --player/Bluetooth will fail"

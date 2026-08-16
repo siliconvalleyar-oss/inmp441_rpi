@@ -99,9 +99,10 @@ bool ensureParentDirectory(const std::string& outputPath) {
     return true;
 }
 
-void runInfoMode(const Config& config) {
+void runInfoMode(const Config& config, const Inmp441_t& mic) {
     std::printf("inmp441_rpi -- hardware / configuration\n");
-    std::printf("  board          : %s\n", audio::I2SController::boardInfo());
+    std::printf("  capture backend: ALSA (kernel I2S driver, dtoverlay=inmp441-bare)\n");
+    std::printf("  ALSA device    : %s\n", mic.alsaDeviceName().c_str());
     std::printf("  sample rate    : %u Hz\n", config.sampleRate);
     std::printf("  BCLK           : %.3f MHz\n",
                 static_cast<double>(config.sampleRate) * 64.0 / 1000000.0);
@@ -116,7 +117,8 @@ void runInfoMode(const Config& config) {
         std::printf("  L/R select     : not driven; wire the mic L/R pin to GND "
                     "(left) or +3V3 (right) yourself\n");
     }
-    std::printf("  run as root     : yes (required by bcm2835)\n");
+    std::printf("  run as root     : not required (ALSA + libgpiod; root only\n"
+                "                    for the OLED display / --player screen)\n");
 }
 
 int runLevelMeter(Inmp441_t& mic, const Config& config) {    Logger& log = Logger::instance();
@@ -760,11 +762,10 @@ int runPlayerScreen(TrackList& tracks, Player& player, OledDisplay& oled,
 int runPlayerMode(const Config& config) {
     Logger& log = Logger::instance();
 
-    // El OLED (SSD1306 por I2C) usa la librería bcm2835, que necesita root.
-    // Se inicializa AQUÍ, ANTES de bajar privilegios para PulseAudio: un
-    // bcm2835_init() fallido (ejecutado como uid no-root) deja el estado
-    // global de la librería corrupto y bcm2835_close() del micrófono
-    // segfaulta al salir del proceso.
+    // El OLED (SSD1306 por I2C) usa la librería bcm2835 (que necesita root).
+    // Se inicializa AQUÍ, ANTES de bajar privilegios para PulseAudio: si se
+    // ejecuta como uid no-root, bcm2835_init() falla y el display simplemente
+    // se omite (la app sigue en consola).
     OledDisplay oled;
     const bool oledReady = oled.init();
     if (oledReady) {
@@ -818,8 +819,9 @@ int runPlayerMode(const Config& config) {
 
     Player player;
 
-    // The OledDisplay destructor powers the screen down; the microphone
-    // owns the bcm2835 mapping, so nothing is closed here.
+    // The OledDisplay destructor powers the screen down (and releases its own
+    // bcm2835 mapping); the microphone owns the ALSA stream + GPIO21 line, so
+    // nothing is closed here.
     return runPlayerScreen(tracks, player, oled, mac);
 }
 
@@ -855,7 +857,7 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
         std::printf("  inmp441_rpi %s - INMP441 I2S microphone recorder\n",
                     appVersion());
         std::printf("============================================================\n");
-        std::printf("  Board   : %s\n", audio::I2SController::boardInfo());
+        std::printf("  Board   : ALSA %s\n", mic.alsaDeviceName().c_str());
         std::printf("  Pins    : SCK=GPIO18  WS=GPIO19  SD=GPIO20\n");
         std::printf("  Rate    : %u Hz\n", config.sampleRate);
         std::printf("  Channel : %s (L/R pin -> %s)\n",
@@ -1099,16 +1101,19 @@ int main(int argc, char* argv[]) {
 
     core::SignalHandler::install();
 
-    // RAII microphone handle: the constructor opens the I2S master and throws
-    // on failure; the destructor shuts the hardware down when `mic` leaves
-    // scope, so nothing needs to be closed explicitly at exit. The player
-    // mode does not need the microphone: it only reads output/ and plays it.
+    // RAII microphone handle: the constructor opens the ALSA capture stream
+    // (kernel I2S driver) and throws on failure; the destructor releases the
+    // stream and the GPIO21 L/R select line when `mic` leaves scope, so
+    // nothing needs to be closed explicitly at exit. The player mode does not
+    // need the microphone: it only reads output/ and plays it.
     std::unique_ptr<Inmp441_t> mic;
     if (config.mode != RunMode::kPlayer) {
         try {
             mic = std::make_unique<Inmp441_t>(config.sampleRate,
                                               config.selectLeftChannel,
-                                              config.driveLrSelectGpio);
+                                              config.driveLrSelectGpio,
+                                              config.alsaDevice,
+                                              config.gpioChip);
         } catch (const std::runtime_error& e) {
             log.error("cannot open microphone: %s", e.what());
             return 1;
@@ -1121,7 +1126,7 @@ int main(int argc, char* argv[]) {
             result = runMenuMode(*mic, config);
             break;
         case RunMode::kInfo:
-            runInfoMode(config);
+            runInfoMode(config, *mic);
             break;
         case RunMode::kLevelMeter:
             result = runLevelMeter(*mic, config);

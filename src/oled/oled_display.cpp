@@ -5,15 +5,12 @@
 // Descripción: Implementación de `OLED::OledDisplay` (SSD1306 128x32
 //              por I2C 0x3C, driver SSD1306_OLED_RPI de Gavin Lyons).
 //
-//              IMPORTANTE: este módulo NO gestiona el ciclo de vida
-//              de bcm2835 (bcm2835_init/close). El mapeo de /dev/mem
-//              lo posee audio::I2SController (el micrófono), que lo
-//              cierra al salir del proceso. Por eso aquí nunca se
-//              llama a bcm2835_close(): cerrar el mapeo mientras el
-//              micrófono sigue abierto rompería la captura I2S.
-//
-//              La clase es "tolerante a fallos": si no hay display
-//              (sin hardware o sin root) la app sigue en consola.
+//              IMPORTANTE: este módulo gestiona su propio ciclo de vida
+//              de bcm2835 (bcm2835_init/close) para el bus I2C del
+//              display, independiente del micrófono (que usa ALSA + kernel
+//              para el I2S de audio). El mapeo de /dev/mem lo cierra aquí,
+//              en shutdown(); la clase es "tolerante a fallos": si no hay
+//              display (sin hardware o sin root) la app sigue en consola.
 //
 //////////////////////////////////////////////////////////////////
 
@@ -92,8 +89,7 @@ bool OledDisplay::init() {
         return false;
     }
 
-    // bcm2835 ya está inicializado por el controlador I2S; bcm2835_init()
-    // es idempotente, así que llamarlo aquí es seguro.
+    // bcm2835_init() es idempotente, así que llamarlo aquí es seguro.
     if (!bcm2835_init()) {
         core::Logger::instance().warning(
             "OLED: bcm2835_init() failed (needs root); continuing without display");
@@ -234,7 +230,10 @@ void OledDisplay::shutdown() {
     oled_->OLEDupdate();
     oled_->OLEDPowerDown();
     oled_->OLED_I2C_OFF();
-    // Sin bcm2835_close(): el mapeo lo cierra I2SController al salir.
+    // Este módulo posee su propio mapeo de /dev/mem (bcm2835_init() en
+    // init()): cerrarlo aquí libera el mapeo al apagar el display. Es
+    // seguro llamarlo aunque init() nunca haya llegado a bcm2835_init().
+    bcm2835_close();
     ready_ = false;
 #endif
 }

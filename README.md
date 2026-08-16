@@ -1,9 +1,12 @@
 # inmp441_rpi
 
-Reads a TDK InvenSense **INMP441** MEMS microphone over the Raspberry Pi's
-**PCM/I2S** peripheral — directly from userspace via the **bcm2835** library,
-no ALSA, no kernel modules. Written in **C++17**, targets the **Raspberry Pi
-Zero 2 W**, and runs on both 32-bit and 64-bit Raspberry Pi OS.
+Reads a TDK InvenSense **INMP441** MEMS microphone through **ALSA**, backed by
+the kernel I2S driver exposed by the `dtoverlay=inmp441-bare` overlay (the Pi's
+I2S peripheral is owned by the kernel). The L/R channel select (GPIO21) is
+driven with **libgpiod**, so recording does not need root. **bcm2835** is still
+used, but only by the OLED display (menu/player). Written in **C++17**, targets
+the **Raspberry Pi Zero 2 W**, and runs on both 32-bit and 64-bit Raspberry Pi
+OS.
 
 ```
 GPIO18 ─── BCLK ──► INMP441 SCK
@@ -14,16 +17,18 @@ GPIO21 ─── L/R  ──► channel select (left by default)
 
 ## Features
 
-- Direct register access to the BCM2835 **PCM/I2S controller** and its clock
-  (`CM_PCM`) — the Pi is the I2S master, so no codec or MCLK is needed.
-- **Sample-accurate alignment** for the INMP441's 24-bit left-justified output.
+- **ALSA capture** through the kernel I2S driver (`dtoverlay=inmp441-bare`):
+  the Pi is the I2S master, so no codec or MCLK is needed.
+- **Sample-accurate alignment** for the INMP441's 24-bit left-justified output
+  (MSB-aligned inside each 32-bit S32_LE slot).
 - Three modes:
   - **level** — live RMS/peak meter in dBFS (default)
   - **wav** — record PCM 16-bit mono WAV
   - **dump** — print raw 32-bit slots to verify wiring/alignment
 - Run modes are independent of the driver: stdout stays clean for data.
 - Pure signal code is **host-testable** (`make test`, no Pi required).
-- Minimal toolchain: only `bcm2835` + standard library, plain `Makefile`.
+- Slim toolchain: `libasound2-dev` + `libgpiod-dev` (via `pkg-config`) for
+  capture, `bcm2835` for the OLED display, plain `Makefile`.
 
 ## Repository structure
 
@@ -34,13 +39,13 @@ inmp441_rpi/
 ├── LICENSE
 ├── include/            # public headers
 │   ├── core/           #   Config, Logger, SignalHandler
-│   └── audio/          #   SampleFormat, I2SController, INMP441, AudioProcessor
+│   └── audio/          #   SampleFormat, AlsaDeviceFinder, INMP441, AudioProcessor
 ├── src/                # implementations (+ main.cpp)
 │   ├── core/
 │   └── audio/
 ├── obj/                # build objects (mirrors src/) — gitignored
 ├── bin/                # binary output — gitignored
-├── docs/               # hardware, registers, usage, architecture
+├── docs/               # hardware, usage, architecture
 ├── scripts/            # dependency installer, build/run helpers
 └── tests/              # host unit tests
 ```
@@ -51,21 +56,24 @@ inmp441_rpi/
 # 1. clone the repository
 git clone <REPO_URL> && cd inmp441_rpi
 
-# 2. install dependencies (build tools + bcm2835 v1.71)
+# 2. install dependencies (ALSA + libgpiod + pkg-config; bcm2835 for the OLED)
 sudo bash scripts/install_dependencies.sh
 
-# 3. build
+# 3. enable the kernel I2S overlay and reboot
+#    (add `dtoverlay=inmp441-bare` to /boot/config.txt — see docs/hardware_setup.md)
+
+# 4. build
 make clean && make -j4
 
-# 4. verify the hardware and capture audio
-sudo ./bin/inmp441_rpi --info
-sudo ./bin/inmp441_rpi --dump 16        # raw slots (wiring/alignment check)
-sudo ./bin/inmp441_rpi --wav mic.wav -d 10
+# 5. verify the hardware and capture audio (no root needed)
+./bin/inmp441_rpi --info
+./bin/inmp441_rpi --dump 16        # raw slots (wiring/alignment check)
+./bin/inmp441_rpi --wav mic.wav -d 10
 ```
 
-> **Important:** no I2S kernel overlay may be active (remove any
-> `dtoverlay=...i2s...` from `/boot/config.txt`); the driver owns the PCM
-> peripheral and its clock exclusively.
+> **Important:** the kernel I2S overlay must be active. Add
+> `dtoverlay=inmp441-bare` to `/boot/config.txt` and reboot — the recorder
+> reads the mic through that ALSA device.
 
 ## Remote build over SSH
 
@@ -74,8 +82,9 @@ ssh admin@localhost "cd /home/admin && git clone <REPO_URL> \
   && cd inmp441_rpi && git pull && make clean && make -j4 && make run"
 ```
 
-`make run` runs with `sudo`; forward extra options with
-`make run ARGS="--wav test.wav -d 5"`.
+`make run` needs no `sudo` (recording uses ALSA + libgpiod); forward extra
+options with `make run ARGS="--wav test.wav -d 5"`. Use `sudo` only when you
+need the OLED screen (menu/player).
 
 ## Documentation
 
@@ -83,7 +92,6 @@ ssh admin@localhost "cd /home/admin && git clone <REPO_URL> \
 | --- | --- |
 | [docs/hardware_setup.md](docs/hardware_setup.md) | Wiring, pinout, board notes |
 | [docs/architecture.md](docs/architecture.md) | Modules and data flow |
-| [docs/i2s_registers.md](docs/i2s_registers.md) | Low-level register configuration |
 | [docs/build_and_install.md](docs/build_and_install.md) | Build/install/SSH workflow |
 | [docs/usage.md](docs/usage.md) | Command reference and examples |
 | [docs/testing.md](docs/testing.md) | Unit tests and hardware validation |

@@ -1,6 +1,8 @@
 # ============================================================================
 # inmp441_rpi - I2S MEMS microphone (INMP441) reader for Raspberry Pi
-# Uses the bcm2835 userspace library for raw PCM/I2S peripheral access.
+# Captures through ALSA (the kernel I2S driver behind dtoverlay=inmp441-bare)
+# and drives the GPIO21 L/R select line with libgpiod, so recording does not
+# need root. bcm2835 is still used by the OLED display (menu/player screens).
 #
 # Build layout (obj/ mirrors src/):
 #   src/audio/foo.cpp  ->  obj/audio/foo.o
@@ -19,10 +21,22 @@ BIN_DIR    := bin
 
 CXX        ?= g++
 CXXSTD     := c++17
+PKGCFG     := pkg-config
 
-# Where the bcm2835 library header lives. The default (/usr/local/include) is
-# what scripts/install_dependencies.sh installs into; override on the command
-# line for cross-build checks (e.g. BCM2835_INCLUDE=/path/to/stub).
+# System libraries (ALSA + libgpiod) resolved via pkg-config so the build
+# works on both armhf and arm64 Raspberry Pi OS.
+PKG_LIBS   := alsa libgpiod
+PKG_CFLAGS := $(shell $(PKGCFG) --cflags $(PKG_LIBS) 2>/dev/null)
+PKG_LDLIBS := $(shell $(PKGCFG) --libs $(PKG_LIBS) 2>/dev/null)
+
+ifeq ($(strip $(PKG_CFLAGS))$(strip $(PKG_LDLIBS)),)
+    $(warning alsa/libgpiod not found via pkg-config. Install them with: \
+        sudo apt install libasound2-dev libgpiod-dev pkg-config)
+endif
+
+# Where the bcm2835 library header lives (used only by the OLED display).
+# The default (/usr/local/include) is what scripts/install_dependencies.sh
+# installs into; override on the command line for cross-build checks.
 BCM2835_INCLUDE ?= /usr/local/include
 
 WARNINGS   := -Wall -Wextra -Wpedantic -Wshadow
@@ -32,10 +46,9 @@ OPT_FLAGS  := -O2
 CXXFLAGS_EXTRA ?=
 CXXFLAGS   := $(OPT_FLAGS) -std=$(CXXSTD) $(WARNINGS) -I$(INC_DIR) \
               -I$(INC_DIR)/oled -I$(INC_DIR)/sound -I$(INC_DIR)/tools \
-              -I$(BCM2835_INCLUDE) $(CXXFLAGS_EXTRA) -MMD -MP
+              -I$(BCM2835_INCLUDE) $(PKG_CFLAGS) $(CXXFLAGS_EXTRA) -MMD -MP
 LDLIBS     := -lbcm2835 -lmpg123 -lao -latomic  # -latomic: std::atomic<double> (8 B) calls __atomic_* on 32-bit ARM
-BCM2835_LIB ?= $(LDLIBS)
-LDFLAGS    := $(BCM2835_LIB) -lm -pthread
+LDFLAGS    ?= $(PKG_LDLIBS) $(LDLIBS) -lm -pthread
 
 # Cross-build startup objects (scripts/cross_build.sh). Empty on native
 # builds; for cross builds they provide the target's crt1.o/crti.o/crtn.o
@@ -76,10 +89,11 @@ $(BIN_DIR) $(OBJ_DIR):
 
 # ---- Convenience ------------------------------------------------------------
 
-# Runs the binary with sudo (required for /dev/mem access).
+# Runs the binary. Recording needs no root (ALSA + libgpiod); use sudo only
+# when you need the OLED display in the menu/player screens.
 # Extra arguments can be passed with ARGS="--wav out.wav -d 10".
 run: all
-	sudo $(TARGET) $(ARGS)
+	$(TARGET) $(ARGS)
 
 test: $(TEST_BIN)
 	$(TEST_BIN)
@@ -93,11 +107,12 @@ clean:
 help:
 	@echo "Targets:"
 	@echo "  all   - build the binary (default)"
-	@echo "  run   - run with sudo (ARGS='--wav x.wav -d 10' for options)"
+	@echo "  run   - run the binary (ARGS='--wav x.wav -d 10' for options)"
 	@echo "  test  - build and run the conversion unit tests (no hardware)"
 	@echo "  clean - remove obj/ and bin/"
 	@echo ""
 	@echo "First-time setup on the Pi: scripts/install_dependencies.sh"
+	@echo ""
 
 # Pull in auto-generated dependency files.
 -include $(DEPS)

@@ -3,10 +3,11 @@
 ```
 Usage: inmp441_rpi [options]
 
-Reads audio from an INMP441 MEMS microphone over the BCM2835 PCM/I2S
-peripheral. By default it shows a console presentation and an interactive
-menu (duration/channel/format/record/level test). It can also run non-stop
-modes: live level meter, WAV/MP3 recording, or raw-slot dump.
+Reads audio from an INMP441 MEMS microphone through ALSA, backed by the
+kernel I2S driver (`dtoverlay=inmp441-bare`); the L/R select (GPIO21) is
+driven with libgpiod. By default it shows a console presentation and an
+interactive menu (duration/channel/format/record/level test). It can also
+run non-stop modes: live level meter, WAV/MP3 recording, or raw-slot dump.
 
 Options:
       --menu                 Interactive menu after a console presentation
@@ -56,6 +57,13 @@ its own file. An explicit `--wav mic.wav` / `--mp3 test.mp3` is kept as-is.
                              The menu's RECORD option enables this automatically.
       --no-lr-gpio           Do NOT drive GPIO 21 (L/R pin). Use this if
                              L/R is hard-wired to GND (left) or 3.3 V (right).
+      --alsa-device <dev>    ALSA capture device (default "default" =
+                             auto-detect the first card named "bare",
+                             i.e. the inmp441-bare overlay). Override
+                             with plughw:<card>,0 when auto-detection
+                             fails or there are several I2S cards.
+      --gpio-chip <chip>     libgpiod chip for the L/R select line
+                             (default: gpiochip0).
       --config <FILE>        JSON configuration file to load/save
                              (default: config.json in the project directory).
       --save-config          Save the current settings to the config file
@@ -94,8 +102,8 @@ Records for `--duration` seconds (default 5) into a standard RIFF/WAVE file,
 PCM **16-bit mono** by default. Use `--rate` for sample rate.
 
 ```bash
-sudo ./bin/inmp441_rpi --wav mic.wav -d 10
-sudo ./bin/inmp441_rpi --wav --file test.wav --rate 44100 --duration 5
+./bin/inmp441_rpi --wav mic.wav -d 10
+./bin/inmp441_rpi --wav --file test.wav --rate 44100 --duration 5
 ```
 
 ### `mp3`
@@ -103,7 +111,7 @@ sudo ./bin/inmp441_rpi --wav --file test.wav --rate 44100 --duration 5
 Same as `wav`, but transcodes with `lame` after recording.
 
 ```bash
-sudo ./bin/inmp441_rpi --mp3 test.mp3 -d 5
+./bin/inmp441_rpi --mp3 test.mp3 -d 5
 ```
 
 ### `player` (play output/ over Bluetooth)
@@ -135,10 +143,10 @@ on the OLED (row 2 = progress bar, row 3 = time + version).
 ### `dump`
 
 Prints raw 32-bit I2S slots (pairs = one frame) and exits. Useful for
-verifying wiring and sample alignment without ALSA.
+verifying wiring and sample alignment of the raw slots.
 
 ```bash
-sudo ./bin/inmp441_rpi --dump 32
+./bin/inmp441_rpi --dump 32
 ```
 
 Example output:
@@ -155,15 +163,16 @@ The INMP441 delivers **24-bit left-justified** samples inside 32-bit slots.
 The recovered 24-bit sample is the slot shifted right by 8:
 
 ```
-raw    = 0x00A3F200   (slot as read from the FIFO)
+raw    = 0x00A3F200   (slot as read from the ALSA stream)
 24-bit = 0x00A3F2     (raw >> 8, arithmetic)
 16-bit = 0x00A3       (raw >> 16)
 ```
 
 When the mic is silent the slots read ≈ `0x00000000`; speaking produces values
-across the full range. If your board deviates (e.g. a shift of one bit), open
-`src/audio/I2SController.cpp` and adjust the I2S data-delay (`CHxPOS`) or the
-conversion in `SampleFormat.hpp`, then rebuild.
+across the full range. If your board deviates (e.g. a shift of one bit), the
+alignment is set by the kernel I2S driver: adjust the I2S data-delay in the
+overlay `overlays/inmp441-bare.dts` (or the conversion in `SampleFormat.hpp`),
+then rebuild and reboot.
 
 ## Persisted configuration
 
@@ -200,17 +209,21 @@ Example:
 
 ```bash
 # Save the current CLI settings
-sudo ./bin/inmp441_rpi --gain 24 --save-config
+./bin/inmp441_rpi --gain 24 --save-config
 
 # Use an alternative config file
-sudo ./bin/inmp441_rpi --config /etc/inmp441_rpi.json --level
+./bin/inmp441_rpi --config /etc/inmp441_rpi.json --level
 ```
 
 ## Notes
 
 - All diagnostics go to **stderr**; `stdout` stays clean for data (dump mode).
+- Recording (`--level`, `--wav`, `--mp3`, `--dump`) needs **no root** (ALSA +
+  libgpiod). Root is only required by the OLED display — the menu (default)
+  and `--player` screens — because `bcm2835` accesses `/dev/mem`.
 - The `--channel` selection maps to the I2S **left** or **right** slot, which
-  is determined by the microphone's **L/R** pin:
+  is determined by the microphone's **L/R** pin (driven with libgpiod on
+  `gpiochip0`, line 21; overridable with `--gpio-chip`):
   - `left` → L/R driven LOW (GPIO 21 = 0) — default
   - `right` → L/R driven HIGH (GPIO 21 = 1)
   - `--no-lr-gpio` → GPIO 21 left untouched

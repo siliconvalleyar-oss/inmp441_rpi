@@ -43,6 +43,8 @@ struct Config {
     bool saveConfigRequested = false;         // --save-config: persist the CLI config
     bool recordMp3 = false;                   // menu format preference ("format" in JSON)
     std::string btMac;                        // Bluetooth A2DP speaker MAC ("bt_mac" in JSON)
+    std::string alsaDevice = "default";       // ALSA capture device; "default" auto-detects the "bare" overlay
+    std::string gpioChip = "gpiochip0";       // libgpiod chip carrying the L/R select line (GPIO21)
     bool showHelp = false;           // --help / -h requested (exit before init)
     bool showVersion = false;        // --version requested (exit before init)
     bool valid = true;

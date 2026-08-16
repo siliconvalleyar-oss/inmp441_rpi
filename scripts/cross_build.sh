@@ -19,10 +19,11 @@
 # The script refuses to build with GCC 13; see the "Compiler" section for how
 # to supply a GCC 10 toolchain without root (extracted .debs).
 #
-# The bcm2835 library is cross-compiled automatically into a local sysroot
-# (no root needed). The sysroot location is auto-detected: ${HOME}/arm-sysroot
-# or /mnt/disk/arm-sysroot (first one found populated); override with
-# ARM_SYSROOT for any other location.
+# The alsa/libgpiod ARM headers+libraries are taken from the sysroot (apt
+# multiarch or copied from a Pi, see section 1); bcm2835 is still cross-built
+# into the sysroot for the OLED display (section 3). The I2S audio capture
+# itself comes from the kernel driver (ALSA overlay), so there is no userspace
+# peripheral library driving the microphone anymore.
 #
 # Linking notes (IMPORTANT):
 #   The PC toolchain (e.g. Ubuntu 24.04 / Mint 22) ships glibc 2.39 headers
@@ -157,16 +158,23 @@ log "Using sysroot: ${ARM_SYSROOT}"
 
 # ---- 1. ARM audio headers (multiarch) --------------------------------------
 if ! echo '#include <mpg123.h>' | "${CROSS_CXX}" -isystem "${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf" -isystem "${ARM_SYSROOT}/usr/include" -E -x c++ - >/dev/null 2>&1 ||
-   ! echo '#include <ao/ao.h>'  | "${CROSS_CXX}" -isystem "${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf" -isystem "${ARM_SYSROOT}/usr/include" -E -x c++ - >/dev/null 2>&1; then
-    die "ARM versions of mpg123/ao are missing. Fix with one of:\n" \
+   ! echo '#include <ao/ao.h>'  | "${CROSS_CXX}" -isystem "${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf" -isystem "${ARM_SYSROOT}/usr/include" -E -x c++ - >/dev/null 2>&1 ||
+   ! echo '#include <alsa/asoundlib.h>' | "${CROSS_CXX}" -isystem "${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf" -isystem "${ARM_SYSROOT}/usr/include" -E -x c++ - >/dev/null 2>&1 ||
+   ! echo '#include <gpiod.h>' | "${CROSS_CXX}" -isystem "${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf" -isystem "${ARM_SYSROOT}/usr/include" -E -x c++ - >/dev/null 2>&1; then
+    die "ARM versions of mpg123/ao/alsa/gpiod are missing. Fix with one of:\n" \
         "  * apt (multiarch, needs root):\n" \
         "      sudo dpkg --add-architecture armhf && sudo apt-get update\n" \
-        "      sudo apt-get install libmpg123-dev:armhf libao-dev:armhf\n" \
+        "      sudo apt-get install libmpg123-dev:armhf libao-dev:armhf \\\n" \
+        "          libasound2-dev:armhf libgpiod-dev:armhf\n" \
         "  * or copy them from a Raspberry Pi into ${ARM_SYSROOT}:\n" \
         "      scp pi@<pi-ip>:/usr/include/mpg123.h pi@<pi-ip>:/usr/include/fmt123.h ${ARM_SYSROOT}/include/\n" \
         "      scp -r pi@<pi-ip>:/usr/include/ao ${ARM_SYSROOT}/include/\n" \
+        "      scp -r pi@<pi-ip>:/usr/include/alsa ${ARM_SYSROOT}/include/\n" \
+        "      scp pi@<pi-ip>:/usr/include/gpiod.h ${ARM_SYSROOT}/include/\n" \
         "      scp pi@<pi-ip>:/usr/lib/arm-linux-gnueabihf/libmpg123.so* ${ARM_SYSROOT}/lib/\n" \
-        "      scp pi@<pi-ip>:/usr/lib/arm-linux-gnueabihf/libao.so* ${ARM_SYSROOT}/lib/"
+        "      scp pi@<pi-ip>:/usr/lib/arm-linux-gnueabihf/libao.so* ${ARM_SYSROOT}/lib/\n" \
+        "      scp pi@<pi-ip>:/usr/lib/arm-linux-gnueabihf/libasound.so* ${ARM_SYSROOT}/lib/\n" \
+        "      scp pi@<pi-ip>:/usr/lib/arm-linux-gnueabihf/libgpiod.so* ${ARM_SYSROOT}/lib/"
 fi
 
 # ---- 2. Pi runtime libraries + headers (glibc 2.31 / libstdc++ GCC 10) ------
@@ -204,8 +212,10 @@ ln -sfn "../../lib/arm-linux-gnueabihf/libgcc_s.so.1"  "${DEVRLIB}/libgcc_s.so"
 ln -sfn "$(basename "${LIBSTDCXX_SO}")"                "${DEVRLIB}/libstdc++.so"
 ln -sfn "arm-linux-gnueabihf/ld-linux-armhf.so.3"      "${ARM_SYSROOT}/lib/ld-linux-armhf.so.3"
 
-# ---- 3. bcm2835 into the local sysroot (no root needed) ---------------------
-# (the header section numbering is kept from the GCC 13-era script)
+# ---- 3. bcm2835 into the local sysroot (used only by the OLED display) ------
+# The I2S audio itself comes from the kernel driver (ALSA), so bcm2835 is no
+# longer the capture backend - but the SSD1306 OLED still compiles against
+# bcm2835.h and links libbcm2835.a, so it is cross-built into the sysroot.
 BCM2835_VERSION="1.71"
 BCM2835_URL="http://www.airspayce.com/mikem/bcm2835/bcm2835-${BCM2835_VERSION}.tar.gz"
 
@@ -234,7 +244,19 @@ else
     cd "${ROOT_DIR}"
 fi
 
-# ---- 4. Link flags against the Pi runtime sysroot ---------------------------
+# ---- 4. alsa/libgpiod runtime libraries in the sysroot ----------------------
+# No build step is needed for these: they come from apt multiarch or are
+# copied from a Pi (see section 1). Just make sure the linker can find them.
+if ! ls "${ARM_SYSROOT}"/lib/arm-linux-gnueabihf/libasound.so.* >/dev/null 2>&1; then
+    die "libasound (ALSA) missing in ${ARM_SYSROOT}. Copy it from a Pi:\n" \
+        "  scp pi@<pi-ip>:/usr/lib/arm-linux-gnueabihf/libasound.so* ${ARM_SYSROOT}/lib/"
+fi
+if ! ls "${ARM_SYSROOT}"/lib/arm-linux-gnueabihf/libgpiod.so.* >/dev/null 2>&1; then
+    die "libgpiod missing in ${ARM_SYSROOT}. Copy it from a Pi:\n" \
+        "  scp pi@<pi-ip>:/usr/lib/arm-linux-gnueabihf/libgpiod.so* ${ARM_SYSROOT}/lib/"
+fi
+
+# ---- 5. Link flags against the Pi runtime sysroot ---------------------------
 # (the header section numbering is kept from the GCC 13-era script)
 CRT1="${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/crt1.o"
 CRTI="${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf/crti.o"
@@ -264,7 +286,7 @@ SYSROOT_LDFLAGS="-nostdlib -no-pie -nostartfiles \
 -L${ARM_SYSROOT}/lib \
 -L${ARM_SYSROOT}/lib/arm-linux-gnueabihf \
 -L${ARM_SYSROOT}/usr/lib/arm-linux-gnueabihf \
--lbcm2835 -lmpg123 -lao \
+-lbcm2835 -lasound -lgpiod -lmpg123 -lao \
 -l:libpthread.so.0 -l:libdl.so.2 -l:librt.so.1 -l:libm.so.6 \
 -l:libstdc++.so.6 -l:libgcc_s.so.1 \
 -l:libc.so.6 -l:ld-linux-armhf.so.3 \
@@ -303,12 +325,17 @@ SYSROOT_CPPFLAGS+=" -isystem ${ARM_SYSROOT}/usr/include/arm-linux-gnueabihf -isy
 
 # GCC 10's libstdc++ already matches the Pi's runtime, so no compat shim is
 # needed (the GCC 13-era scripts/cross/compat_shim.cpp stays for reference).
+# PKG_CFLAGS/PKG_LDLIBS are forced empty so the host's pkg-config alsa/gpiod
+# flags do not leak host include/link paths into the cross build; the sysroot
+# paths come from SYSROOT_CPPFLAGS / SYSROOT_LDFLAGS instead.
 log "Cross-compiling with ${CROSS_CXX} (sysroot: ${ARM_SYSROOT})..."
 make -j"$(nproc)" \
     CXX="${CROSS_CXX}" \
     CXXFLAGS_EXTRA="${SYSROOT_CPPFLAGS}" \
     BCM2835_INCLUDE="${ARM_SYSROOT}/include" \
-    BCM2835_LIB="${SYSROOT_LDFLAGS}" \
+    PKG_CFLAGS= \
+    PKG_LDLIBS= \
+    LDFLAGS="${SYSROOT_LDFLAGS}" \
     CRT_BEGIN="${CRT1} ${CRTI} ${CRTBEGIN}" \
     CRT_END="${CRTEND} ${CRTN}"
 

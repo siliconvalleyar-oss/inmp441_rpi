@@ -1,9 +1,12 @@
 // Overlay I2S "bare" para INMP441 / micrófono I2S esclavo.
 //
-// Basado en googlevoicehat-soundcard (usa el codec "google,voicehat" que
-// expone captura Y reproducción) pero con la CPU I2S como MASTER del reloj
-// (bitclock/frame-master = CPU). El overlay original deja la CPU como esclava
-// y el codec dummy no genera reloj -> el bus nunca se activa y ALSA graba
+// Usa el codec genérico "dmic-codec" (snd-soc-dmic), el driver estándar del
+// kernel para micrófonos MEMS digitales, en lugar del dummy "google,voicehat"
+// (que requería un GPIO de sdmode del HAT de amplificador y expone captura y
+// reproducción que aquí no se usan). La CPU I2S actúa como MASTER del reloj
+// (bitclock/frame-master = CPU), igual que la variante "master" del proyecto
+// de referencia admp441-rpi. El overlay original deja la CPU como esclava y
+// el codec dummy no genera reloj -> el bus nunca se activa y ALSA graba
 // silencio. Con la CPU como master, BCLK (GPIO18) y WS (GPIO19) se generan y
 // el INMP441 (esclavo) entrega datos por GPIO20.
 //
@@ -12,7 +15,7 @@
 // Instalación:
 //   dtc -@ -I dts -O dtb -o inmp441-bare.dtbo inmp441-bare.dts
 //   sudo cp inmp441-bare.dtbo /boot/firmware/overlays/
-//   # en config.txt: dtoverlay=inmp441-bare
+//   # en config.txt: dtoverlay=inmp441-bare[,alsaname=mems-mic]
 /dts-v1/;
 /plugin/;
 
@@ -27,35 +30,21 @@
 	};
 
 	fragment@1 {
-		target = <&gpio>;
-		__overlay__ {
-			inmp441_pins: inmp441_pins {
-				brcm,pins = <16>;
-				brcm,function = <1>; /* out */
-				brcm,pull = <0>; /* none */
-			};
-		};
-	};
-
-	fragment@2 {
 		target-path = "/";
 		__overlay__ {
-			voicehat_codec: voicehat-codec {
+			mic_codec: dmic-codec {
 				#sound-dai-cells = <0>;
-				compatible = "google,voicehat";
-				pinctrl-names = "default";
-				pinctrl-0 = <&inmp441_pins>;
-				sdmode-gpios = <&gpio 16 0>;
+				compatible = "dmic-codec";
+				num-channels = <2>;
 				status = "okay";
 			};
 		};
 	};
 
-	fragment@3 {
+	fragment@2 {
 		target = <&sound>;
 		__overlay__ {
 			compatible = "simple-audio-card";
-			i2s-controller = <&i2s_clk_producer>;
 			status = "okay";
 
 			simple-audio-card,name = "inmp441-bare";
@@ -71,8 +60,12 @@
 			};
 
 			simple-audio-card,codec {
-				sound-dai = <&voicehat_codec>;
+				sound-dai = <&mic_codec>;
 			};
 		};
+	};
+
+	__overrides__ {
+		alsaname = <&sound>, "simple-audio-card.name";
 	};
 };
