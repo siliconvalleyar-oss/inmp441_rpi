@@ -37,6 +37,23 @@ acts as the I2S master).
               └─────────────────┘                     └────────┘
 ```
 
+## INMP441 datasheet specs
+
+| Parameter | Value |
+| --- | --- |
+| Interface | I2S digital, 24-bit twos complement, MSB-first |
+| Sample rate range | 7.8 kHz – 50 kHz (continuous) |
+| Sensitivity | −26 dBFS @ 94 dB SPL, 1 kHz |
+| SNR | 61 dBA |
+| Frequency response | 60 Hz – 15 kHz (−3 dB) |
+| Supply current | 1.4–2.5 mA @ 1.8–3.3 V |
+| Package | LGA 4.72 × 3.76 × 1 mm |
+| SCK/WS direction | **Inputs** (host is I2S master) |
+
+> 64 SCK cycles per WS frame (32 per channel). The mic enters high-Z on SD
+> when not transmitting, which is why ALSA sees it as S32_LE with the 24
+> useful bits left-aligned in the upper bits of each 32-bit slot.
+
 ## Before you start
 
 1. **Enable the I2S kernel overlay.** Capture goes through the kernel I2S
@@ -56,9 +73,15 @@ acts as the I2S master).
 
 ## Troubleshooting
 
-| Symptom | Likely cause |
-| --- | --- |
-| No data (ALSA xrun / all-zero frames) | Overlay not loaded (no `dtoverlay=inmp441-bare`) or BCLK/WS not reaching the mic; check GPIO 18/19/20 wiring |
-| Signal present but very quiet or half-scale | Sample alignment: run `--dump` and confirm the 24-bit value is in bits 31–8 (see [usage.md](usage.md#sample-alignment)) |
-| Left/right swapped | L/R selection differs from the `--channel` option |
-| Constant noise / low amplitude | Check that the mic's L/R pin is not floating (hard-wire it or use the default GPIO 21 drive) |
+| Symptom | Likely cause | Check |
+| --- | --- | --- |
+| No data (ALSA xrun / all-zero frames) | Overlay not loaded or BCLK/WS not reaching the mic | `arecord -l` shows `inmp441-bare`; check GPIO 18/19/20 wiring |
+| `arecord -l` shows no `inmp441-bare` card | Overlay not in `/boot/firmware/overlays/` or not in `config.txt` | `ls /boot/firmware/overlays/inmp441-bare.dtbo`; `grep dtoverlay /boot/firmware/config.txt`; reboot |
+| `snd_pcm_open` fails with "No such device" | Wrong ALSA device name | Run `arecord -l`, use the correct `plughw:N,0` name |
+| `Permission denied` on `snd_pcm_open` | User not in `audio` group | `sudo usermod -a -G audio $USER && newgrp audio` |
+| Overruns (`-EPIPE`) during recording | CPU load or period too small | Reduce background load; increase period with `--period` if supported |
+| Recording much shorter than expected | Kernel I2S clock misconfigured (wrong `dai-tdm-slot` / `num-channels` in overlay) | Verify overlay uses minimal `simple-audio-card` + `dmic-codec` without TDM slots; test with `arecord -D plughw:N,0 -f S32_LE -r 48000 -c 2 -d 5 /tmp/test.wav` and check file size (~1.9 MB for 5 s) |
+| Signal present but very quiet or half-scale | Sample alignment | Run `--dump` and confirm the 24-bit value is in bits 31–8 (see [usage.md](usage.md#sample-alignment)) |
+| Left/right swapped | L/R selection differs from `--channel` option | Check GPIO21 state or `--channel` flag |
+| Constant noise / low amplitude | L/R pin floating | Hard-wire it or use the default GPIO 21 drive (`--no-lr-gpio` only if hard-wired) |
+| No decoupling noise but erratic readings | Missing capacitor between VDD and GND | Add 100 nF (0.1 µF) ceramic capacitor as close to the mic as possible |
