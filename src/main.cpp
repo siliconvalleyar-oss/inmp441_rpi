@@ -882,6 +882,8 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
         std::printf("  7) Play output/ over Bluetooth\n");
         std::printf("  8) HPF cutoff ...... %g Hz (0 = off)\n", config.hpfHz);
         std::printf("  9) LPF cutoff ...... %g Hz (0 = off)\n", config.lpfHz);
+        std::printf("  N) Noise reduction . gain=%+.0f dB, HPF=%g Hz, LPF=%g Hz\n",
+                    config.gainDb, config.hpfHz, config.lpfHz);
         std::printf("  0/Q) Quit\n");
         std::printf("------------------------------------------------------------\n");
         std::printf("Choice> ");
@@ -1035,12 +1037,78 @@ int runMenuMode(Inmp441_t& mic, const Config& initial) {
                 }
                 break;
             }
+            case 'n': {
+                std::printf("\n  Noise reduction presets:\n");
+                std::printf("    1) Light  .. gain=%+.0f HPF=100 LPF=12000\n", config.gainDb);
+                std::printf("    2) Medium .. gain=%+.0f HPF=150 LPF=8000\n", config.gainDb);
+                std::printf("    3) Strong .. gain=%+.0f HPF=200 LPF=5000\n", config.gainDb);
+                std::printf("    4) Custom .. set each parameter manually\n");
+                std::printf("    0) Cancel\n");
+                std::printf("  Choice> ");
+                std::fflush(stdout);
+                std::string sub;
+                std::getline(std::cin, sub);
+                if (sub == "1") {
+                    config.gainDb = core::clampGainDb(30.0);
+                    config.hpfHz = core::clampHpfHz(100.0);
+                    config.lpfHz = core::clampLpfHz(12000.0);
+                    log.info("noise reduction: light (gain=%+.0f HPF=100 LPF=12000)",
+                             config.gainDb);
+                    persistConfig();
+                } else if (sub == "2") {
+                    config.gainDb = core::clampGainDb(24.0);
+                    config.hpfHz = core::clampHpfHz(150.0);
+                    config.lpfHz = core::clampLpfHz(8000.0);
+                    log.info("noise reduction: medium (gain=%+.0f HPF=150 LPF=8000)",
+                             config.gainDb);
+                    persistConfig();
+                } else if (sub == "3") {
+                    config.gainDb = core::clampGainDb(18.0);
+                    config.hpfHz = core::clampHpfHz(200.0);
+                    config.lpfHz = core::clampLpfHz(5000.0);
+                    log.info("noise reduction: strong (gain=%+.0f HPF=200 LPF=5000)",
+                             config.gainDb);
+                    persistConfig();
+                } else if (sub == "4") {
+                    std::printf("  Gain dB [%+.1f]> ", config.gainDb);
+                    std::fflush(stdout);
+                    std::string v;
+                    std::getline(std::cin, v);
+                    if (!v.empty()) {
+                        char* e = nullptr;
+                        double d = std::strtod(v.c_str(), &e);
+                        if (e != v.c_str() && *e == '\0') config.gainDb = core::clampGainDb(d);
+                    }
+                    std::printf("  HPF Hz [%g]> ", config.hpfHz);
+                    std::fflush(stdout);
+                    std::getline(std::cin, v);
+                    if (!v.empty()) {
+                        char* e = nullptr;
+                        double d = std::strtod(v.c_str(), &e);
+                        if (e != v.c_str() && *e == '\0' && std::isfinite(d))
+                            config.hpfHz = core::clampHpfHz(d);
+                    }
+                    std::printf("  LPF Hz [%g]> ", config.lpfHz);
+                    std::fflush(stdout);
+                    std::getline(std::cin, v);
+                    if (!v.empty()) {
+                        char* e = nullptr;
+                        double d = std::strtod(v.c_str(), &e);
+                        if (e != v.c_str() && *e == '\0' && std::isfinite(d))
+                            config.lpfHz = core::clampLpfHz(d);
+                    }
+                    log.info("noise reduction: custom (gain=%+.0f HPF=%g LPF=%g)",
+                             config.gainDb, config.hpfHz, config.lpfHz);
+                    persistConfig();
+                }
+                break;
+            }
             case '0':
             case 'q':
                 std::printf("Bye.\n");
                 return 0;
             default:
-                std::printf("  (invalid choice; try 1-9, 0/Q)\n");
+                std::printf("  (invalid choice; try 1-9, N, 0/Q)\n");
                 break;
         }
     }
