@@ -53,5 +53,12 @@ los segundos transcurridos, un progress bar y la extensión del archivo.
       (stash@{0} = pantalla del player, commiteada como `1ad7d48`;
       stash@{1} = build/docs, ya en el historial). Se dejaron sin borrar
       (borrarlos es destructivo); se pueden dropear con `git stash drop`
-- [ ] (opcional) Eliminar headers `c++/10` sin uso que quedaron en el sysroot
-      (el toolchain GCC 10 trae los suyos)
+- [x] Eliminar headers `c++/10` sin uso que quedaron en el sysroot
+      (el toolchain GCC 10 trae los suyos) — borrados `usr/include/c++` de
+      `/mnt/disk/arm-sysroot` (12 MB). Verificado: la traza `-H` de
+      `<vector>`/`<iostream>` resuelve a `gcc10-cross/.../include/c++/10` y
+      los 15 fuentes compilan con `-fsyntax-only` con los flags exactos del
+      cross-build sin esa carpeta. Nota: el cross-build no llegó a linkear
+      porque el sysroot carece de las libs runtime de audio
+      (libasound/libgpiod/libmpg123/libao) — gap preexistente, ajeno a esta
+      limpieza
