@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -40,27 +39,18 @@ using SOUND_LIST::TrackList;
 // Frames fetched per I2S read burst (~5 ms at 48 kHz).
 constexpr size_t kChunkFrames = 240;
 
-// Application version reported by --version and the menu banner.
-constexpr const char* kAppVersion = "1.7.7";
+// Application version reported by --version and the menu banner. It is baked
+// in at COMPILE TIME from the VERSION file at the repo root: the Makefile
+// passes -DAPP_VERSION="<content of VERSION>" (see the Makefile), so the
+// binary always reports the version of the release it was built from, even
+// when copied to the Pi without the repo (scp bin/inmp441_rpi pi@...:/tmp/).
+// The fallback only covers builds that did not define the macro.
+#ifndef APP_VERSION
+#define APP_VERSION "unknown"
+#endif
 
-// Version shown at runtime: read from the VERSION file at the working
-// directory (the repo root when launched with make run), so the menu banner
-// always reflects the tagged release. Falls back to the compiled-in constant
-// when the file is missing or unreadable.
 const char* appVersion() {
-    static std::string version;
-    if (version.empty()) {
-        std::ifstream file("VERSION");
-        std::string line;
-        if (file && std::getline(file, line)) {
-            const size_t first = line.find_first_not_of(" \t\r\n");
-            const size_t last = line.find_last_not_of(" \t\r\n");
-            if (first != std::string::npos && last >= first) {
-                version = line.substr(first, last - first + 1);
-            }
-        }
-    }
-    return version.empty() ? kAppVersion : version.c_str();
+    return APP_VERSION;
 }
 
 // Level test duration used by the interactive menu.

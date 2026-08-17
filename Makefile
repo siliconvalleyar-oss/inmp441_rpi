@@ -41,12 +41,18 @@ BCM2835_INCLUDE ?= /usr/local/include
 
 WARNINGS   := -Wall -Wextra -Wpedantic -Wshadow
 OPT_FLAGS  := -O2
+# Application version, baked in at COMPILE TIME from the VERSION file at the
+# repo root (the single source of truth for the release number, see
+# docs/LEARNINGS.md). The binary reports this version even when copied to the
+# Pi without the repo (scp bin/inmp441_rpi pi@...:/tmp/).
+APP_VERSION := $(shell cat VERSION 2>/dev/null || echo unknown)
 # Extra flags for cross-builds (scripts/cross_build.sh): e.g. -isystem for
 # the target's glibc headers so the binary matches the Pi's runtime.
 CXXFLAGS_EXTRA ?=
 CXXFLAGS   := $(OPT_FLAGS) -std=$(CXXSTD) $(WARNINGS) -I$(INC_DIR) \
               -I$(INC_DIR)/oled -I$(INC_DIR)/sound -I$(INC_DIR)/tools \
-              -I$(BCM2835_INCLUDE) $(PKG_CFLAGS) $(CXXFLAGS_EXTRA) -MMD -MP
+              -I$(BCM2835_INCLUDE) $(PKG_CFLAGS) $(CXXFLAGS_EXTRA) -MMD -MP \
+              -DAPP_VERSION=\"$(APP_VERSION)\"
 LDLIBS     := -lbcm2835 -lmpg123 -lao -latomic  # -latomic: std::atomic<double> (8 B) calls __atomic_* on 32-bit ARM
 LDFLAGS    ?= $(PKG_LDLIBS) $(LDLIBS) -lm -pthread
 
